@@ -45,12 +45,23 @@ public enum URLNormalizer {
         if (scheme == "http" && components.port == 80) || (scheme == "https" && components.port == 443) {
             components.port = nil
         }
-        if components.path.isEmpty {
-            components.path = "/"
+
+        // RFC 3986 §5.2.4: collapse dot segments on every path, not just relative
+        // resolution — an already-absolute URL like "http://x/a/../b" bypasses
+        // Foundation's relative-resolution normalization entirely.
+        var encodedPath = components.percentEncodedPath
+        if encodedPath.isEmpty {
+            encodedPath = "/"
         }
+        encodedPath = removeDotSegments(encodedPath)
+        // RFC 3986 §6.2.2.1: percent-encoded octets are case-insensitive; canonicalize
+        // to uppercase hex digits so "%2f" and "%2F" hash identically. This only
+        // touches the two hex digits after each "%" — never decodes or re-encodes.
+        components.percentEncodedPath = uppercasedPercentEscapes(in: encodedPath)
+
         // Preserve an empty-but-present query ("?") as absent; keep parameter order otherwise.
-        if components.query?.isEmpty == true {
-            components.query = nil
+        if let encodedQuery = components.percentEncodedQuery {
+            components.percentEncodedQuery = encodedQuery.isEmpty ? nil : uppercasedPercentEscapes(in: encodedQuery)
         }
 
         guard let finalURL = components.url else { return nil }
@@ -60,4 +71,72 @@ public enum URLNormalizer {
             path: components.path
         )
     }
+}
+
+/// RFC 3986 §5.2.4 remove_dot_segments, applied to a percent-encoded path.
+/// Operates purely on literal "." / ".." segments delimited by "/" — percent-escaped
+/// dots (e.g. "%2E") are left alone, matching the RFC's scope.
+private func removeDotSegments(_ path: String) -> String {
+    var input = Substring(path)
+    var output = ""
+
+    func dropLastOutputSegment() {
+        if let slash = output.range(of: "/", options: .backwards) {
+            output.removeSubrange(slash.lowerBound...)
+        } else {
+            output = ""
+        }
+    }
+
+    while !input.isEmpty {
+        if input.hasPrefix("../") {
+            input = input.dropFirst(3)
+        } else if input.hasPrefix("./") {
+            input = input.dropFirst(2)
+        } else if input.hasPrefix("/./") {
+            input = "/" + input.dropFirst(3)
+        } else if input == "/." {
+            input = "/"
+        } else if input.hasPrefix("/../") {
+            input = "/" + input.dropFirst(4)
+            dropLastOutputSegment()
+        } else if input == "/.." {
+            input = "/"
+            dropLastOutputSegment()
+        } else if input == "." || input == ".." {
+            input = ""
+        } else {
+            let searchStart = input.hasPrefix("/") ? input.index(after: input.startIndex) : input.startIndex
+            if let nextSlash = input[searchStart...].firstIndex(of: "/") {
+                output += input[input.startIndex..<nextSlash]
+                input = input[nextSlash...]
+            } else {
+                output += input
+                input = ""
+            }
+        }
+    }
+    return output
+}
+
+/// Uppercases the two hex digits of every percent-escape triplet in `string`.
+/// Leaves everything else — including malformed "%" sequences — untouched, and
+/// never decodes or re-encodes any character.
+private func uppercasedPercentEscapes(in string: String) -> String {
+    let chars = Array(string)
+    var result = ""
+    result.reserveCapacity(chars.count)
+    var i = 0
+    while i < chars.count {
+        if chars[i] == "%", i + 2 < chars.count, chars[i + 1].isHexDigit, chars[i + 2].isHexDigit {
+            result.append("%")
+            result.append(Character(chars[i + 1].uppercased()))
+            result.append(Character(chars[i + 2].uppercased()))
+            i += 3
+        } else {
+            result.append(chars[i])
+            i += 1
+        }
+    }
+    return result
 }

@@ -69,3 +69,30 @@ private func norm(_ s: String, base: String? = nil) -> NormalizedURL? {
     #expect(a.sha256 != c.sha256)
     #expect(a.sha256.count == 32)
 }
+
+// MARK: - Fix round: percent-encoding case, dot-segment collapse, empty query
+
+@Test func canonicalizesPercentEncodingCaseInPath() {
+    #expect(norm("http://example.com/%2f")?.sha256 == norm("http://example.com/%2F")?.sha256)
+    #expect(norm("http://example.com/%2f")?.absoluteString == "http://example.com/%2F")
+}
+
+@Test func canonicalizesPercentEncodingCaseInQuery() {
+    #expect(norm("http://example.com/a?x=%2f")?.absoluteString == "http://example.com/a?x=%2F")
+}
+
+@Test func collapsesDotSegmentsInAbsoluteURL() {
+    #expect(norm("http://example.com/a/../b")?.absoluteString == "http://example.com/b")
+}
+
+@Test func collapsesTrailingDotDotToDirectory() {
+    #expect(norm("http://example.com/a/b/..")?.absoluteString == "http://example.com/a/")
+}
+
+@Test func dotDotCannotEscapeAboveRoot() {
+    #expect(norm("http://example.com/../a")?.absoluteString == "http://example.com/a")
+}
+
+@Test func emptyQueryIsTreatedAsAbsent() {
+    #expect(norm("http://example.com/a?")?.absoluteString == norm("http://example.com/a")?.absoluteString)
+}
