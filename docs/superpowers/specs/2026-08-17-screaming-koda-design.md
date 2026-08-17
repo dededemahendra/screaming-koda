@@ -49,7 +49,7 @@ fully testable before a window exists.
 
 | Unit | Responsibility | Depends on |
 |---|---|---|
-| `URLNormalizer` | Canonical URL form: case, trailing slash, fragment, parameter order | — |
+| `URLNormalizer` | Canonical URL form: lowercase scheme and host, strip fragment, drop default ports, resolve relative references. Trailing slashes and query parameter order are deliberately preserved — both can be semantically significant | — |
 | `RobotsPolicy` | Fetch, parse, cache robots.txt; answer "may I fetch X?"; expose crawl-delay | `Fetcher` |
 | `Frontier` | The queue: dedup, depth tracking, include/exclude rules; persisted for resume | `Store`, `URLNormalizer` |
 | `Fetcher` | URLSession wrapper; manual redirect handling; per-host politeness; timeouts | — |
