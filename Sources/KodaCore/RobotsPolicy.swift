@@ -50,22 +50,32 @@ public struct RobotsRules: Sendable {
                     groups[agent, default: Group()].crawlDelay = delay
                 }
             case "sitemap":
-                lastLineWasAgent = false
                 sitemaps.append(value)
             default:
-                lastLineWasAgent = false
+                break
             }
         }
         return RobotsRules(groups: groups, sitemaps: sitemaps)
     }
 
-    /// The group for this agent: an exact match if present, otherwise the wildcard group.
+    /// The group for this agent: an exact match if present, otherwise the longest
+    /// non-wildcard group name that is a substring of the agent string (ties broken
+    /// lexicographically for determinism — dictionary iteration order is not stable),
+    /// otherwise the wildcard group.
     func group(for userAgent: String) -> Group? {
         let lower = userAgent.lowercased()
         if let exact = groups[lower] { return exact }
-        for (name, group) in groups where name != "*" && lower.contains(name) {
-            return group
+        var bestName: String?
+        for name in groups.keys where name != "*" && lower.contains(name) {
+            if let current = bestName {
+                if name.count > current.count || (name.count == current.count && name < current) {
+                    bestName = name
+                }
+            } else {
+                bestName = name
+            }
         }
+        if let bestName { return groups[bestName] }
         return groups["*"]
     }
 
@@ -86,6 +96,13 @@ public struct RobotsRules: Sendable {
     }
 
     /// robots.txt globbing: `*` matches any run of characters, `$` anchors the end.
+    ///
+    /// Non-final segments are matched leftmost, which is safe: consuming as little of the
+    /// path as possible only ever leaves *more* room for the segments that follow, so a
+    /// leftmost match never forecloses a later one. The final segment of a `$`-anchored
+    /// pattern is different — it must land exactly at the end of the path, so it is matched
+    /// against the path's suffix instead of via leftmost search, avoiding the false negative
+    /// where an earlier occurrence of that literal leaves no way to reach the end.
     static func matches(pattern: String, path: String) -> Bool {
         let anchored = pattern.hasSuffix("$")
         let body = anchored ? String(pattern.dropLast()) : pattern
@@ -93,15 +110,23 @@ public struct RobotsRules: Sendable {
 
         var index = path.startIndex
         for (offset, segment) in segments.enumerated() {
-            if segment.isEmpty {
-                if offset == segments.count - 1 && anchored { return index == path.endIndex }
-                continue
+            let isFirst = offset == 0
+            let isLast = offset == segments.count - 1
+
+            if isLast && anchored {
+                if segment.isEmpty { return true } // trailing "*$" (or bare "$") matches any remainder
+                guard path.hasSuffix(segment) else { return false }
+                let suffixStart = path.index(path.endIndex, offsetBy: -segment.count)
+                if suffixStart < index { return false }
+                if isFirst && suffixStart != path.startIndex { return false }
+                return true
             }
+
+            if segment.isEmpty { continue }
             guard let found = path.range(of: segment, range: index..<path.endIndex) else { return false }
-            if offset == 0 && found.lowerBound != path.startIndex { return false }
+            if isFirst && found.lowerBound != path.startIndex { return false }
             index = found.upperBound
         }
-        if anchored { return index == path.endIndex }
         return true
     }
 }

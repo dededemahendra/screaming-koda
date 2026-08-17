@@ -78,3 +78,47 @@ Sitemap: https://example.com/sitemap.xml
 @Test func allowAllIsPermissive() {
     #expect(RobotsRules.allowAll.isAllowed(path: "/anything", userAgent: "Bot"))
 }
+
+// MARK: - Fix-round regression tests
+
+@Test func anchoredWildcardBacktracksToFindAValidMatch() {
+    // Equivalent regex ^/a.*aa$ matches "/aaaa" — the matcher must backtrack past
+    // the leftmost occurrence of the final literal segment to find one that reaches the end.
+    let r = RobotsRules.parse("User-agent: *\nDisallow: /a*aa$")
+    #expect(!r.isAllowed(path: "/aaaa", userAgent: "Bot"))
+}
+
+@Test func trailingWildcardAnchorMatchesAnyRemainder() {
+    let r = RobotsRules.parse("User-agent: *\nDisallow: /a*$")
+    #expect(!r.isAllowed(path: "/a", userAgent: "Bot"))
+    #expect(!r.isAllowed(path: "/aXYZ", userAgent: "Bot"))
+}
+
+@Test func longestUserAgentGroupNameWinsDeterministically() {
+    // "SomeBot" and "Bot" are both substrings of UA "SomeBot/1.0"; the longer, more
+    // specific group name must win, and must win the same way every time this is checked.
+    let text = """
+    User-agent: Bot
+    Disallow: /short/
+
+    User-agent: SomeBot
+    Disallow: /long/
+    """
+    let r = RobotsRules.parse(text)
+    for _ in 0..<20 {
+        #expect(!r.isAllowed(path: "/long/x", userAgent: "SomeBot/1.0"))
+        #expect(r.isAllowed(path: "/short/x", userAgent: "SomeBot/1.0"))
+    }
+}
+
+@Test func unrecognizedDirectiveBetweenUserAgentLinesDoesNotSplitGroup() {
+    let text = """
+    User-agent: A
+    Host: example.com
+    User-agent: B
+    Disallow: /x
+    """
+    let r = RobotsRules.parse(text)
+    #expect(!r.isAllowed(path: "/x", userAgent: "A"))
+    #expect(!r.isAllowed(path: "/x", userAgent: "B"))
+}
