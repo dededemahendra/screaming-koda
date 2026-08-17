@@ -43,11 +43,17 @@ extension Store {
     }
 
     /// Claims up to `limit` queued URLs, shallowest first, marking them in-flight.
+    ///
+    /// A claimed row whose stored `url` string can no longer be re-normalized (e.g. a
+    /// future normalizer change, or corrupt data) is marked skipped rather than left
+    /// in-flight forever — otherwise it would silently strand the frontier: nothing
+    /// else moves a row out of the in-flight state, and `claimNext` only ever selects
+    /// queued rows, so the row would never be crawled and never complete.
     public func claimNext(limit: Int) throws -> [FrontierItem] {
         try dbQueue.write { db in
             let rows = try Row.fetchAll(
                 db,
-                sql: "SELECT id, url, host, path, depth FROM urls WHERE state = 0 ORDER BY depth ASC, id ASC LIMIT ?",
+                sql: "SELECT id, url, depth FROM urls WHERE state = 0 ORDER BY depth ASC, id ASC LIMIT ?",
                 arguments: [limit]
             )
             guard !rows.isEmpty else { return [] }
@@ -57,10 +63,17 @@ extension Store {
                 sql: "UPDATE urls SET state = 1 WHERE id IN (\(placeholders))",
                 arguments: StatementArguments(ids)
             )
-            return rows.compactMap { row in
-                guard let normalized = URLNormalizer.normalize(row["url"], relativeTo: nil) else { return nil }
-                return FrontierItem(id: row["id"], url: normalized, depth: row["depth"])
+            var items: [FrontierItem] = []
+            items.reserveCapacity(rows.count)
+            for row in rows {
+                let id: Int64 = row["id"]
+                if let normalized = URLNormalizer.normalize(row["url"], relativeTo: nil) {
+                    items.append(FrontierItem(id: id, url: normalized, depth: row["depth"]))
+                } else {
+                    try Self.setState(db, id: id, state: 3)
+                }
             }
+            return items
         }
     }
 
