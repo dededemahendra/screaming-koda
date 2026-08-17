@@ -60,7 +60,15 @@ extension Store {
                    h1, h1_count, h2_count, canonical_id, meta_robots, x_robots_tag,
                    lang, word_count, content_hash)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(url_id) DO UPDATE SET title=excluded.title
+                ON CONFLICT(url_id) DO UPDATE SET
+                  title=excluded.title, title_length=excluded.title_length, title_count=excluded.title_count,
+                  meta_description=excluded.meta_description,
+                  meta_description_length=excluded.meta_description_length,
+                  meta_description_count=excluded.meta_description_count,
+                  h1=excluded.h1, h1_count=excluded.h1_count, h2_count=excluded.h2_count,
+                  canonical_id=excluded.canonical_id, meta_robots=excluded.meta_robots,
+                  x_robots_tag=excluded.x_robots_tag, lang=excluded.lang,
+                  word_count=excluded.word_count, content_hash=excluded.content_hash
                 """,
             arguments: [
                 result.urlID, facts.title, facts.titleLength, facts.titleCount,
@@ -134,7 +142,10 @@ extension Store {
         if shouldQueue, let maxDepth = config.maxDepth, depth > maxDepth { shouldQueue = false }
         if shouldQueue, !passesFilters(url, config: config) { shouldQueue = false }
         if shouldQueue {
-            let total = try Int.fetchOne(db, sql: "SELECT count(*) FROM urls") ?? 0
+            // Only rows that still count against crawl budget — queued, in-flight, or done.
+            // Skipped rows (state 3) are external links, images, and filtered targets that
+            // will never be crawled, so they must not starve internal discovery of budget.
+            let total = try Int.fetchOne(db, sql: "SELECT count(*) FROM urls WHERE state != 3") ?? 0
             if total >= config.urlCap { shouldQueue = false }
         }
 

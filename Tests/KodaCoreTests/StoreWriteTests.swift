@@ -32,11 +32,14 @@ private func makeFacts(links: [LinkFact] = [], images: [ImageFact] = [], hreflan
     )
     _ = try store.write(results: [result], config: config, now: Date())
 
-    try store.dbQueue.read { db in
-        try #expect(try Int.fetchOne(db, sql: "SELECT status FROM responses WHERE url_id = ?", arguments: [id]) == 200)
-        try #expect(try String.fetchOne(db, sql: "SELECT title FROM page_facts WHERE url_id = ?", arguments: [id]) == "T")
+    let (status, title) = try store.dbQueue.read { db in
+        let status = try Int.fetchOne(db, sql: "SELECT status FROM responses WHERE url_id = ?", arguments: [id])
+        let title = try String.fetchOne(db, sql: "SELECT title FROM page_facts WHERE url_id = ?", arguments: [id])
+        return (status, title)
     }
-    try #expect(try store.urlCounts().done == 1)
+    #expect(status == 200)
+    #expect(title == "T")
+    #expect(try store.urlCounts().done == 1)
 }
 
 @Test func discoveredLinksBecomeQueuedURLs() throws {
@@ -52,8 +55,8 @@ private func makeFacts(links: [LinkFact] = [], images: [ImageFact] = [], hreflan
     let discovered = try store.write(results: [result], config: config, now: Date())
 
     #expect(discovered == 2)
-    try #expect(try store.urlCounts().queued == 2)
-    try #expect(try store.claimNext(limit: 10).first?.depth == 1, "children are one level deeper than the parent")
+    #expect(try store.urlCounts().queued == 2)
+    #expect(try store.claimNext(limit: 10).first?.depth == 1, "children are one level deeper than the parent")
 }
 
 @Test func linkRowsRecordAnchorAndRel() throws {
@@ -79,9 +82,10 @@ private func makeFacts(links: [LinkFact] = [], images: [ImageFact] = [], hreflan
                                               contentType: "text/html", contentLength: 1, responseTimeMs: 1,
                                               redirectTarget: nil, bodyGz: nil, xRobotsTag: nil, facts: facts)],
                         config: config, now: Date())
-    try store.dbQueue.read { db in
-        try #expect(try Int.fetchOne(db, sql: "SELECT is_internal FROM urls WHERE host = 'other.com'") == 0)
+    let isInternal = try store.dbQueue.read { db in
+        try Int.fetchOne(db, sql: "SELECT is_internal FROM urls WHERE host = 'other.com'")
     }
+    #expect(isInternal == 0)
 }
 
 @Test func transportFailureIsRecordedNotDropped() throws {
@@ -95,7 +99,7 @@ private func makeFacts(links: [LinkFact] = [], images: [ImageFact] = [], hreflan
         #expect(row?["status"] == 0)
         #expect(row?["error_kind"] == "URLError.timedOut")
     }
-    try #expect(try store.urlCounts().done == 1, "a failed fetch still completes the URL")
+    #expect(try store.urlCounts().done == 1, "a failed fetch still completes the URL")
 }
 
 @Test func redirectTargetIsLinkedAndQueued() throws {
@@ -124,10 +128,13 @@ private func makeFacts(links: [LinkFact] = [], images: [ImageFact] = [], hreflan
                                               contentType: "text/html", contentLength: 1, responseTimeMs: 1,
                                               redirectTarget: nil, bodyGz: nil, xRobotsTag: nil, facts: facts)],
                         config: config, now: Date())
-    try store.dbQueue.read { db in
-        try #expect(try String.fetchOne(db, sql: "SELECT alt FROM images WHERE url_id = ?", arguments: [id]) == "Alt")
-        try #expect(try String.fetchOne(db, sql: "SELECT lang FROM hreflang WHERE url_id = ?", arguments: [id]) == "fr")
+    let (alt, lang) = try store.dbQueue.read { db in
+        let alt = try String.fetchOne(db, sql: "SELECT alt FROM images WHERE url_id = ?", arguments: [id])
+        let lang = try String.fetchOne(db, sql: "SELECT lang FROM hreflang WHERE url_id = ?", arguments: [id])
+        return (alt, lang)
     }
+    #expect(alt == "Alt")
+    #expect(lang == "fr")
 }
 
 @Test func excludePatternsBlockDiscovery() throws {
@@ -142,9 +149,10 @@ private func makeFacts(links: [LinkFact] = [], images: [ImageFact] = [], hreflan
                                                           redirectTarget: nil, bodyGz: nil, xRobotsTag: nil, facts: facts)],
                                      config: config, now: Date())
     #expect(discovered == 1)
-    try store.dbQueue.read { db in
-        try #expect(try Int.fetchOne(db, sql: "SELECT count(*) FROM urls WHERE path LIKE '/admin%'") == 0)
+    let adminCount = try store.dbQueue.read { db in
+        try Int.fetchOne(db, sql: "SELECT count(*) FROM urls WHERE path LIKE '/admin%'")
     }
+    #expect(adminCount == 0)
 }
 
 @Test func nofollowLinksAreNotQueuedByDefault() throws {
@@ -155,10 +163,10 @@ private func makeFacts(links: [LinkFact] = [], images: [ImageFact] = [], hreflan
                                                           redirectTarget: nil, bodyGz: nil, xRobotsTag: nil, facts: facts)],
                                      config: config, now: Date())
     #expect(discovered == 0)
-    try store.dbQueue.read { db in
-        try #expect(try Int.fetchOne(db, sql: "SELECT count(*) FROM links WHERE from_url_id = ?", arguments: [id]) == 1,
-                "the link is still recorded, just not crawled")
+    let linkCount = try store.dbQueue.read { db in
+        try Int.fetchOne(db, sql: "SELECT count(*) FROM links WHERE from_url_id = ?", arguments: [id])
     }
+    #expect(linkCount == 1, "the link is still recorded, just not crawled")
 }
 
 @Test func gzipRoundTrips() {
@@ -167,4 +175,90 @@ private func makeFacts(links: [LinkFact] = [], images: [ImageFact] = [], hreflan
     #expect(compressed != nil)
     #expect(compressed!.count < original.count)
     #expect(Gzip.decompress(compressed!) == original)
+}
+
+@Test func pageFactsUpsertRefreshesAllColumns() throws {
+    let (store, config, id, url) = try seededStore()
+
+    var first = PageFacts()
+    first.title = "First"
+    first.titleCount = 1
+    first.h1 = "H1-first"
+    first.h1Count = 1
+    first.h2Count = 2
+    first.metaDescription = "First desc"
+    first.metaDescriptionCount = 1
+    first.metaRobots = "index,follow"
+    first.lang = "en"
+    first.wordCount = 100
+    first.contentHash = Data([0x01])
+
+    let firstResult = CrawlResult(urlID: id, url: url, depth: 0, status: 200, errorKind: nil,
+                                  contentType: "text/html", contentLength: 1, responseTimeMs: 1,
+                                  redirectTarget: nil, bodyGz: nil, xRobotsTag: "noindex", facts: first)
+    _ = try store.write(results: [firstResult], config: config, now: Date())
+
+    var second = PageFacts()
+    second.title = "Second"
+    second.titleCount = 2
+    second.h1 = "H1-second"
+    second.h1Count = 3
+    second.h2Count = 4
+    second.metaDescription = "Second desc"
+    second.metaDescriptionCount = 2
+    second.metaRobots = "noindex,nofollow"
+    second.lang = "fr"
+    second.wordCount = 999
+    second.contentHash = Data([0x02])
+    second.canonical = "https://example.com/canonical"
+
+    let secondResult = CrawlResult(urlID: id, url: url, depth: 0, status: 200, errorKind: nil,
+                                   contentType: "text/html", contentLength: 2, responseTimeMs: 2,
+                                   redirectTarget: nil, bodyGz: nil, xRobotsTag: "noindex,nofollow", facts: second)
+    _ = try store.write(results: [secondResult], config: config, now: Date())
+
+    let row = try store.dbQueue.read { db in
+        try Row.fetchOne(db, sql: """
+            SELECT title, title_count, h1, h1_count, h2_count, meta_description,
+                   meta_description_count, meta_robots, x_robots_tag, lang, word_count,
+                   content_hash, canonical_id
+            FROM page_facts WHERE url_id = ?
+            """, arguments: [id])
+    }
+
+    #expect(row?["title"] == "Second")
+    #expect(row?["title_count"] == 2)
+    #expect(row?["h1"] == "H1-second", "h1 must reflect the second write, not stay stuck on the first")
+    #expect(row?["h1_count"] == 3)
+    #expect(row?["h2_count"] == 4)
+    #expect(row?["meta_description"] == "Second desc")
+    #expect(row?["meta_description_count"] == 2)
+    #expect(row?["meta_robots"] == "noindex,nofollow")
+    #expect(row?["x_robots_tag"] == "noindex,nofollow")
+    #expect(row?["lang"] == "fr")
+    #expect(row?["word_count"] == 999, "word_count must reflect the second write, not stay stuck on the first")
+    let contentHash: Data? = row?["content_hash"]
+    #expect(contentHash == Data([0x02]), "content_hash must reflect the second write, not stay stuck on the first")
+    let canonicalID: Int64? = row?["canonical_id"]
+    #expect(canonicalID != nil, "canonical_id must be populated by the second write")
+}
+
+@Test func urlCapExcludesSkippedRowsFromBudget() throws {
+    let (store, config, id, url) = try seededStore()
+    var cappedConfig = config
+    cappedConfig.urlCap = 2
+    let facts = makeFacts(links: [
+        LinkFact(href: "https://other.com/x", anchor: "Ext", rel: nil, position: 0),
+        LinkFact(href: "/internal", anchor: "Int", rel: nil, position: 1),
+    ])
+    let result = CrawlResult(urlID: id, url: url, depth: 0, status: 200, errorKind: nil,
+                             contentType: "text/html", contentLength: 1, responseTimeMs: 1,
+                             redirectTarget: nil, bodyGz: nil, xRobotsTag: nil, facts: facts)
+
+    let discovered = try store.write(results: [result], config: cappedConfig, now: Date())
+
+    #expect(discovered == 1, "the external link must not consume crawl budget, so the internal link still fits under the cap")
+    let counts = try store.urlCounts()
+    #expect(counts.queued == 1, "the internal link is queued; the seed itself is now done, the external link is skipped")
+    #expect(counts.done == 1, "the seed page was crawled by this very result")
 }
