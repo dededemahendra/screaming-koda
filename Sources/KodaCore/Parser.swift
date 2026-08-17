@@ -68,7 +68,7 @@ public struct SwiftSoupParser: PageParser {
 
     /// Visible text with script, style, and noscript removed and whitespace collapsed.
     static func visibleText(_ doc: Document) throws -> String {
-        let copy = try doc.copy() as! Document
+        let copy = doc.copy() as! Document
         try copy.select("script, style, noscript").remove()
         let raw = try copy.body()?.text() ?? ""
         return raw.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
