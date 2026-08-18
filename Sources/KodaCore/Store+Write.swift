@@ -28,7 +28,8 @@ extension Store {
                         result.urlID, result.status, result.errorKind, result.contentType,
                         result.contentLength, result.responseTimeMs,
                         try Self.resolveTarget(db, result.redirectTarget, parent: result,
-                                               config: config, seedHost: seedHost, now: now, discovered: &discovered),
+                                               config: config, seedHost: seedHost, now: now, discovered: &discovered,
+                                               inheritsParentDepth: true),
                         now.timeIntervalSince1970, result.bodyGz,
                     ]
                 )
@@ -50,7 +51,8 @@ extension Store {
     ) throws {
         let canonicalNormalized = facts.canonical.flatMap { URLNormalizer.normalize($0, relativeTo: result.url) }
         let canonicalID = try Self.resolveTarget(db, canonicalNormalized, parent: result, config: config,
-                                                 seedHost: seedHost, now: now, discovered: &discovered)
+                                                 seedHost: seedHost, now: now, discovered: &discovered,
+                                                 inheritsParentDepth: false)
 
         try db.execute(
             sql: """
@@ -117,21 +119,37 @@ extension Store {
         }
     }
 
-    /// A redirect target keeps the parent's depth rather than descending a level, because a
-    /// redirect is the same logical page, not a child of it — so `parentDepth` is passed as
-    /// `parent.depth - 1` (offsetting `upsertURL`'s own `+ 1`). This also applies to canonical
-    /// targets, which route through this same function.
+    /// Resolves a redirect or canonical target discovered from `parent`, which route through this
+    /// same function but must not be treated identically:
+    ///
+    /// - A redirect target is the *same logical page* as its parent, not a child of it, so it
+    ///   inherits the parent's own depth. `inheritsParentDepth: true` passes `parent.depth - 1`
+    ///   (offsetting `upsertURL`'s own `+ 1`), and the redirect hop count increments from the
+    ///   parent's hop count, since this is another link in the same redirect chain.
+    /// - A canonical target that was previously undiscovered genuinely is one level deeper than
+    ///   the page declaring it, so `inheritsParentDepth: false` passes `parent.depth` and lets
+    ///   `upsertURL` descend normally — which also means `config.maxDepth` correctly cuts it off.
+    ///   It is not part of a redirect chain, so its hop count starts fresh at 0.
     static func resolveTarget(
         _ db: Database, _ target: NormalizedURL?, parent: CrawlResult, config: CrawlConfig,
-        seedHost: String?, now: Date, discovered: inout Int
+        seedHost: String?, now: Date, discovered: inout Int, inheritsParentDepth: Bool
     ) throws -> Int64? {
         guard let target else { return nil }
-        let parentHops = try Int.fetchOne(
-            db, sql: "SELECT redirect_hops FROM urls WHERE id = ?", arguments: [parent.urlID]
-        ) ?? 0
-        return try upsertURL(db, target, parentDepth: parent.depth - 1, config: config, seedHost: seedHost,
+        let parentDepth: Int
+        let redirectHops: Int
+        if inheritsParentDepth {
+            let parentHops = try Int.fetchOne(
+                db, sql: "SELECT redirect_hops FROM urls WHERE id = ?", arguments: [parent.urlID]
+            ) ?? 0
+            parentDepth = parent.depth - 1
+            redirectHops = parentHops + 1
+        } else {
+            parentDepth = parent.depth
+            redirectHops = 0
+        }
+        return try upsertURL(db, target, parentDepth: parentDepth, config: config, seedHost: seedHost,
                              now: now, enqueue: isInternal(target, seedHost: seedHost, config: config),
-                             discovered: &discovered, redirectHops: parentHops + 1)
+                             discovered: &discovered, redirectHops: redirectHops)
     }
 
     /// Inserts the URL if unseen. `enqueue` false means the row is recorded as skipped rather than queued.

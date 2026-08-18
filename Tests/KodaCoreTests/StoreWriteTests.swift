@@ -243,6 +243,56 @@ private func makeFacts(links: [LinkFact] = [], images: [ImageFact] = [], hreflan
     #expect(canonicalID != nil, "canonical_id must be populated by the second write")
 }
 
+@Test func canonicalTargetDescendsOneLevelFromParent() throws {
+    let (store, config, id, url) = try seededStore()
+    var facts = makeFacts()
+    facts.canonical = "https://example.com/canonical-target"
+    let result = CrawlResult(urlID: id, url: url, depth: 0, status: 200, errorKind: nil,
+                             contentType: "text/html", contentLength: 1, responseTimeMs: 1,
+                             redirectTarget: nil, bodyGz: nil, xRobotsTag: nil, facts: facts)
+    _ = try store.write(results: [result], config: config, now: Date())
+
+    let depth = try store.dbQueue.read { db in
+        try Int.fetchOne(db, sql: "SELECT depth FROM urls WHERE url = ?",
+                         arguments: ["https://example.com/canonical-target"])
+    }
+    #expect(depth == 1, "a canonical to a previously-undiscovered URL is one level deeper than the page declaring it")
+}
+
+@Test func canonicalTargetRespectsMaxDepthCutoff() throws {
+    let (store, config, id, url) = try seededStore()
+    var cappedConfig = config
+    cappedConfig.maxDepth = 0
+    var facts = makeFacts()
+    facts.canonical = "https://example.com/canonical-target"
+    let result = CrawlResult(urlID: id, url: url, depth: 0, status: 200, errorKind: nil,
+                             contentType: "text/html", contentLength: 1, responseTimeMs: 1,
+                             redirectTarget: nil, bodyGz: nil, xRobotsTag: nil, facts: facts)
+    _ = try store.write(results: [result], config: cappedConfig, now: Date())
+
+    let state = try store.dbQueue.read { db in
+        try Int.fetchOne(db, sql: "SELECT state FROM urls WHERE url = ?",
+                         arguments: ["https://example.com/canonical-target"])
+    }
+    #expect(state == 3, "with maxDepth 0, a canonical target one level deeper must be skipped, not queued")
+    #expect(try store.urlCounts().queued == 0, "the depth cutoff must apply to canonical targets, not just links")
+}
+
+@Test func redirectTargetStillInheritsParentDepth() throws {
+    let (store, config, id, url) = try seededStore()
+    let target = URLNormalizer.normalize("https://example.com/redirect-target", relativeTo: nil)!
+    let result = CrawlResult(urlID: id, url: url, depth: 0, status: 301, errorKind: nil,
+                             contentType: nil, contentLength: nil, responseTimeMs: 5,
+                             redirectTarget: target, bodyGz: nil, xRobotsTag: nil, facts: nil)
+    _ = try store.write(results: [result], config: config, now: Date())
+
+    let depth = try store.dbQueue.read { db in
+        try Int.fetchOne(db, sql: "SELECT depth FROM urls WHERE url = ?",
+                         arguments: ["https://example.com/redirect-target"])
+    }
+    #expect(depth == 0, "a redirect target is the same logical page as its parent, so it inherits the parent's depth")
+}
+
 @Test func urlCapExcludesSkippedRowsFromBudget() throws {
     let (store, config, id, url) = try seededStore()
     var cappedConfig = config
