@@ -98,6 +98,62 @@ private func fixtureDirectory() throws -> URL {
     return url
 }
 
+/// Serves a real 301 redirect over real HTTP for the duration of a test.
+///
+/// `python3 -m http.server` (used by `FixtureServer` above) can only serve static files from a
+/// directory and has no way to emit a redirect, so this runs a tiny standalone
+/// `BaseHTTPRequestHandler` script (`Fixtures/redirect_server.py`) instead: `/redirect-me`
+/// answers 301 with a `Location: /target.html` header, `/target.html` answers 200, everything
+/// else (including `/robots.txt`) answers 404. Mirrors `FixtureServer`'s ephemeral-port
+/// discovery and `defer`-based teardown so no python process is ever orphaned.
+private final class RedirectFixtureServer {
+    private let process = Process()
+    let port: Int
+
+    init(script: URL) throws {
+        port = try findFreePort()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        process.arguments = [script.path, "\(port)"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+    }
+
+    /// Polls `/target.html` (not the redirecting path) until it answers 200, so tests never
+    /// race the process starting up.
+    func waitUntilReady(timeout: TimeInterval = 10) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        let client = URLSessionHTTPClient()
+        while Date() < deadline {
+            let outcome = await client.fetch(url: "http://127.0.0.1:\(port)/target.html", method: "GET",
+                                             userAgent: "probe", timeout: 1)
+            if case .response(let r) = outcome, r.status == 200 { return }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        throw NSError(domain: "RedirectFixtureServer", code: 1, userInfo: [
+            NSLocalizedDescriptionKey:
+                "server did not start on port \(port) within \(timeout)s — the port was free when probed but may " +
+                "have been grabbed by another process before python3 bound it (check with `lsof -i :\(port)`), " +
+                "or redirect_server.py may have failed to launch (check /usr/bin/python3 exists)",
+        ])
+    }
+
+    /// Terminates the server and waits for exit so a failed test never leaves an
+    /// orphaned python process holding the port for the next run.
+    func stop() {
+        guard process.isRunning else { return }
+        process.terminate()
+        process.waitUntilExit()
+    }
+}
+
+private func redirectServerScript() throws -> URL {
+    guard let url = Bundle.module.url(forResource: "Fixtures/redirect_server", withExtension: "py") else {
+        throw NSError(domain: "Fixtures", code: 1, userInfo: [NSLocalizedDescriptionKey: "redirect_server.py not found"])
+    }
+    return url
+}
+
 @Test func crawlsRealHTTPServerEndToEnd() async throws {
     let server = try FixtureServer(directory: try fixtureDirectory())
     defer { server.stop() }
@@ -162,4 +218,43 @@ private func fixtureDirectory() throws -> URL {
     }
     let decompressed = try #require(body.flatMap { Gzip.decompress($0) })
     #expect(String(decoding: decompressed, as: UTF8.self).contains("Shared Title"))
+}
+
+/// Every other redirect test in the project uses a stub `HTTPClient` — this is the one place
+/// that proves, over a real socket, that the crawler's manual redirect handling (refusing
+/// `URLSession`'s automatic redirect following so each hop lands as its own row) actually
+/// works against a real 301 response rather than only against a hand-written `FetchOutcome`.
+@Test func redirectIsRecordedSeparatelyOverRealHTTP() async throws {
+    let server = try RedirectFixtureServer(script: try redirectServerScript())
+    defer { server.stop() }
+    try await server.waitUntilReady()
+
+    var config = CrawlConfig(seedURL: "http://127.0.0.1:\(server.port)/redirect-me")
+    config.workers = 1
+
+    let (store, robotsOutcome) = try await CrawlSession.start(
+        dbPath: nil, config: config,
+        client: URLSessionHTTPClient(), parser: SwiftSoupParser(), onProgress: nil
+    )
+    #expect(robotsOutcome == .absent, "the fixture server 404s /robots.txt")
+
+    let redirectRow = try await store.dbQueue.read { db in
+        try Row.fetchOne(db, sql: """
+            SELECT r.status, r.redirect_target_id, t.path AS target_path FROM responses r
+            JOIN urls u ON u.id = r.url_id
+            LEFT JOIN urls t ON t.id = r.redirect_target_id
+            WHERE u.path = '/redirect-me'
+            """)
+    }
+    #expect(redirectRow?["status"] == 301)
+    let targetID: Int64? = redirectRow?["redirect_target_id"]
+    #expect(targetID != nil, "the redirect resolved to a target row instead of being followed silently")
+    #expect(redirectRow?["target_path"] == "/target.html")
+
+    let targetStatus = try await store.dbQueue.read { db in
+        try Int.fetchOne(db, sql: """
+            SELECT r.status FROM responses r JOIN urls u ON u.id = r.url_id WHERE u.path = '/target.html'
+            """)
+    }
+    #expect(targetStatus == 200, "the target was fetched separately, not collapsed into the redirect's own response")
 }

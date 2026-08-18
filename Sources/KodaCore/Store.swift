@@ -104,6 +104,9 @@ public final class Store: @unchecked Sendable {
                 CREATE INDEX idx_hreflang_url ON hreflang(url_id);
                 """)
         }
+        m.registerMigration("v2-redirect-hops") { db in
+            try db.execute(sql: "ALTER TABLE urls ADD COLUMN redirect_hops INTEGER NOT NULL DEFAULT 0")
+        }
         return m
     }
 

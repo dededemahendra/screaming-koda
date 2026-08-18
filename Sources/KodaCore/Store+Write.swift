@@ -117,20 +117,32 @@ extension Store {
         }
     }
 
+    /// A redirect target keeps the parent's depth rather than descending a level, because a
+    /// redirect is the same logical page, not a child of it — so `parentDepth` is passed as
+    /// `parent.depth - 1` (offsetting `upsertURL`'s own `+ 1`). This also applies to canonical
+    /// targets, which route through this same function.
     static func resolveTarget(
         _ db: Database, _ target: NormalizedURL?, parent: CrawlResult, config: CrawlConfig,
         seedHost: String?, now: Date, discovered: inout Int
     ) throws -> Int64? {
         guard let target else { return nil }
-        return try upsertURL(db, target, parentDepth: parent.depth, config: config, seedHost: seedHost,
+        let parentHops = try Int.fetchOne(
+            db, sql: "SELECT redirect_hops FROM urls WHERE id = ?", arguments: [parent.urlID]
+        ) ?? 0
+        return try upsertURL(db, target, parentDepth: parent.depth - 1, config: config, seedHost: seedHost,
                              now: now, enqueue: isInternal(target, seedHost: seedHost, config: config),
-                             discovered: &discovered)
+                             discovered: &discovered, redirectHops: parentHops + 1)
     }
 
     /// Inserts the URL if unseen. `enqueue` false means the row is recorded as skipped rather than queued.
+    /// `redirectHops` is the number of redirect hops from the original request to this URL — 0 for
+    /// URLs discovered any other way (links, images, hreflang, the seed). A chain that exceeds
+    /// `config.maxRedirects` is still recorded (so it's visible in reports) but not queued, which
+    /// is what stops a server generating a fresh URL every hop from running forever.
     static func upsertURL(
         _ db: Database, _ url: NormalizedURL, parentDepth: Int, config: CrawlConfig,
-        seedHost: String?, now: Date, enqueue: Bool, discovered: inout Int
+        seedHost: String?, now: Date, enqueue: Bool, discovered: inout Int,
+        redirectHops: Int = 0
     ) throws -> Int64 {
         if let existing = try Int64.fetchOne(db, sql: "SELECT id FROM urls WHERE url_hash = ?", arguments: [url.sha256]) {
             return existing
@@ -141,6 +153,7 @@ extension Store {
         var shouldQueue = enqueue
         if shouldQueue, let maxDepth = config.maxDepth, depth > maxDepth { shouldQueue = false }
         if shouldQueue, !passesFilters(url, config: config) { shouldQueue = false }
+        if shouldQueue, redirectHops > config.maxRedirects { shouldQueue = false }
         if shouldQueue {
             // Only rows that still count against crawl budget — queued, in-flight, or done.
             // Skipped rows (state 3) are external links, images, and filtered targets that
@@ -151,11 +164,11 @@ extension Store {
 
         try db.execute(
             sql: """
-                INSERT INTO urls (url, url_hash, host, path, depth, is_internal, discovered_at, state)
-                VALUES (?,?,?,?,?,?,?,?)
+                INSERT INTO urls (url, url_hash, host, path, depth, is_internal, discovered_at, state, redirect_hops)
+                VALUES (?,?,?,?,?,?,?,?,?)
                 """,
             arguments: [url.absoluteString, url.sha256, url.host, url.path, depth,
-                        internalFlag ? 1 : 0, now.timeIntervalSince1970, shouldQueue ? 0 : 3]
+                        internalFlag ? 1 : 0, now.timeIntervalSince1970, shouldQueue ? 0 : 3, redirectHops]
         )
         if shouldQueue { discovered += 1 }
         return db.lastInsertedRowID
