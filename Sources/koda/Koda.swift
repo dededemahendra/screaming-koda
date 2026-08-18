@@ -46,6 +46,12 @@ struct Crawl: AsyncParsableCommand {
         }
         let path = db ?? FileManager.default.currentDirectoryPath + "/\(host).koda"
         if FileManager.default.fileExists(atPath: path) {
+            // Resuming an existing crawl is deferred to M2 — for now, re-crawling into the
+            // same path replaces whatever was there. That's an accepted M1 behavior, but it
+            // must never be silent: a user re-running a crawl later to compare results would
+            // otherwise lose the previous crawl with no indication it happened.
+            print("Existing crawl database found at \(path) — replacing it.")
+            print("(Resuming an existing crawl is not supported yet; the previous crawl's data will be lost.)")
             try FileManager.default.removeItem(atPath: path)
         }
 
