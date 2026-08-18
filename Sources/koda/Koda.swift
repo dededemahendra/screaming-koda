@@ -50,13 +50,13 @@ struct Crawl: AsyncParsableCommand {
             // same path replaces whatever was there. That's an accepted M1 behavior, but it
             // must never be silent: a user re-running a crawl later to compare results would
             // otherwise lose the previous crawl with no indication it happened.
-            print("Existing crawl database found at \(path) — replacing it.")
-            print("(Resuming an existing crawl is not supported yet; the previous crawl's data will be lost.)")
+            Self.logLine("Existing crawl database found at \(path) — replacing it.")
+            Self.logLine("(Resuming an existing crawl is not supported yet; the previous crawl's data will be lost.)")
             try FileManager.default.removeItem(atPath: path)
         }
 
-        print("Crawling \(url) → \(path)")
-        if ignoreRobots { print("WARNING: ignoring robots.txt") }
+        Self.logLine("Crawling \(url) → \(path)")
+        if ignoreRobots { Self.logLine("WARNING: ignoring robots.txt") }
 
         let started = Date()
         let (store, robotsOutcome) = try await CrawlSession.start(
@@ -69,7 +69,12 @@ struct Crawl: AsyncParsableCommand {
             }
         )
         let elapsed = Date().timeIntervalSince(started)
-        print("\n")
+        // The progress line above ends with a bare `\r` and no trailing newline — leaving
+        // the cursor mid-line. Terminate it on the SAME stream (stderr) it was written on,
+        // before anything else prints, so the next thing to appear (a robots warning, or the
+        // summary's first line) always starts on a fresh line rather than being appended to
+        // — or, worse, visually overwritten by — the dangling progress text.
+        FileHandle.standardError.write(Data("\n".utf8))
 
         if case .unreachable(let reason) = robotsOutcome {
             Self.printRobotsUnreachableWarning(reason: reason)
@@ -78,13 +83,34 @@ struct Crawl: AsyncParsableCommand {
         Self.printSummary(try store.summary(), elapsed: elapsed)
     }
 
+    /// Writes one diagnostic/commentary line to stderr, terminated with `\n`.
+    ///
+    /// All of the CLI's running commentary — the crawl header, the existing-database
+    /// overwrite notice, the robots-ignored warning, the robots-unreachable warning — goes
+    /// through here rather than `print` (stdout). Reasons, per Task 11 review finding 4:
+    ///
+    /// 1. It puts this text on the same stream, and through the same unbuffered
+    ///    `FileHandle.write` call, as the progress line's `\r`-prefixed updates. `print` to
+    ///    stdout is buffered — fully block-buffered whenever stdout isn't a live tty — so
+    ///    mixing it with unbuffered stderr writes let a progress update land in front of
+    ///    still-buffered warning text and visually erase it. Since the header/notices are
+    ///    written strictly before the crawl (and its concurrent `onProgress` calls) starts,
+    ///    routing them through the same stream and write mechanism as progress guarantees
+    ///    they hit the terminal first, deterministically, regardless of buffering.
+    /// 2. It keeps stdout reserved for the one thing meant to be redirected or piped: the
+    ///    final summary. A caller who runs `koda crawl ... > report.txt` gets a clean report
+    ///    with none of the running commentary mixed in.
+    static func logLine(_ s: String) {
+        FileHandle.standardError.write(Data((s + "\n").utf8))
+    }
+
     /// robots.txt being unreachable (a 5xx or a transport failure) is treated as
     /// disallow-all rather than as consent to crawl — see `RobotsFetchOutcome`. That means
     /// a crawl can legitimately come back with zero (or very few) pages, and a user seeing
     /// an empty summary with no explanation would reasonably conclude the tool is broken.
     /// This warning is what stands between "the site's robots.txt was down" and a bug report.
     static func printRobotsUnreachableWarning(reason: String) {
-        print("""
+        Self.logLine("""
         ============================================================
         WARNING: robots.txt could not be fetched (\(reason)).
 
@@ -96,7 +122,6 @@ struct Crawl: AsyncParsableCommand {
         If you own this site and want to crawl anyway, rerun with
         --ignore-robots.
         ============================================================
-
         """)
     }
 
