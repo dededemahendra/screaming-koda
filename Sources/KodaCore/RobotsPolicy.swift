@@ -16,6 +16,16 @@ public struct RobotsRules: Sendable {
 
     public static let allowAll = RobotsRules(groups: [:], sitemaps: [])
 
+    /// A synthetic ruleset that disallows every path for every agent. Used when
+    /// robots.txt could not be reached at all — a 5xx or a transport failure is not
+    /// the site owner's permission to crawl, unlike a 404 (which legitimately means
+    /// there is no robots.txt). The pattern "/" matches every path, since every
+    /// normalized path starts with "/".
+    public static let disallowAll = RobotsRules(
+        groups: ["*": Group(rules: [Rule(pattern: "/", isAllow: false)])],
+        sitemaps: []
+    )
+
     public static func parse(_ text: String) -> RobotsRules {
         var groups: [String: Group] = [:]
         var currentAgents: [String] = []
