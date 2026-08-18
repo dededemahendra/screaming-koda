@@ -166,3 +166,83 @@ private func runCrawl(config: CrawlConfig? = nil) async throws -> Store {
     #expect(!box.updates.isEmpty)
     #expect(box.updates.last!.crawled >= 6)
 }
+
+/// Tracks how many `fetch` calls are simultaneously in flight, for asserting on
+/// whether crawl-delay actually serializes requests instead of just spacing batches.
+private actor ConcurrencyTracker {
+    private var current = 0
+    private var maxObserved = 0
+
+    func enter() {
+        current += 1
+        maxObserved = max(maxObserved, current)
+    }
+
+    func exit() {
+        current -= 1
+    }
+
+    func maxConcurrency() -> Int { maxObserved }
+}
+
+/// Like `FixtureClient`, but holds each fetch open for `fetchDelay` and reports its
+/// entry/exit to a `ConcurrencyTracker` so tests can observe overlap between requests.
+private struct TrackingClient: HTTPClient {
+    let pages: [String: (Int, [String: String], String)]
+    let tracker: ConcurrencyTracker
+    let fetchDelay: TimeInterval
+
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
+        await tracker.enter()
+        try? await Task.sleep(nanoseconds: UInt64(fetchDelay * 1_000_000_000))
+        let outcome: FetchOutcome
+        if let (status, headers, body) = pages[url] {
+            var merged = headers
+            if merged["Content-Type"] == nil { merged["Content-Type"] = "text/html" }
+            outcome = .response(HTTPResponse(status: status, headers: merged, body: Data(body.utf8), elapsedMs: 1))
+        } else {
+            outcome = .response(HTTPResponse(status: 404, headers: [:], body: Data(), elapsedMs: 1))
+        }
+        await tracker.exit()
+        return outcome
+    }
+}
+
+@Test func crawlDelaySerializesRequests() async throws {
+    let store = try Store(path: nil)
+    try store.migrate()
+    var config = CrawlConfig(seedURL: "https://site.test/")
+    config.workers = 5
+    try store.initializeCrawl(config: config, startedAt: Date())
+    _ = try store.insertURLIfNew(URLNormalizer.normalize("https://site.test/", relativeTo: nil)!,
+                                 depth: 0, isInternal: true, discoveredAt: Date())
+
+    let tracker = ConcurrencyTracker()
+    let client = TrackingClient(pages: site, tracker: tracker, fetchDelay: 0.02)
+    // A tiny crawl-delay keeps the suite fast while still requiring serialization.
+    let robots = RobotsRules.parse("User-agent: *\nCrawl-delay: 0.01")
+    let engine = CrawlEngine(store: store, client: client, parser: SwiftSoupParser(),
+                             config: config, robots: robots)
+    try await engine.run(onProgress: nil)
+
+    let maxConcurrency = await tracker.maxConcurrency()
+    #expect(maxConcurrency == 1, "crawl-delay must serialize requests, not fire a concurrent burst every interval")
+}
+
+@Test func noCrawlDelayAllowsConcurrentRequests() async throws {
+    let store = try Store(path: nil)
+    try store.migrate()
+    var config = CrawlConfig(seedURL: "https://site.test/")
+    config.workers = 5
+    try store.initializeCrawl(config: config, startedAt: Date())
+    _ = try store.insertURLIfNew(URLNormalizer.normalize("https://site.test/", relativeTo: nil)!,
+                                 depth: 0, isInternal: true, discoveredAt: Date())
+
+    let tracker = ConcurrencyTracker()
+    let client = TrackingClient(pages: site, tracker: tracker, fetchDelay: 0.02)
+    let engine = CrawlEngine(store: store, client: client, parser: SwiftSoupParser(), config: config)
+    try await engine.run(onProgress: nil)
+
+    let maxConcurrency = await tracker.maxConcurrency()
+    #expect(maxConcurrency > 1, "without crawl-delay, workers should still fetch concurrently")
+}

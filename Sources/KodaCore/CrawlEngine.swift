@@ -33,7 +33,14 @@ public actor CrawlEngine {
     /// Drains the frontier until nothing is queued. Never throws on a bad page.
     public func run(onProgress: (@Sendable (CrawlProgress) -> Void)?) async throws {
         try store.resetInFlight()
-        let batchSize = max(config.workers, 1)
+        let delay = robots.crawlDelay(userAgent: config.userAgent)
+        // A crawl-delay directive means requests must be serialized and spaced by
+        // that delay, not fired in a `workers`-wide concurrent burst every interval.
+        // Driving the batch size to 1 makes each loop iteration process exactly one
+        // URL, so the per-iteration sleep below ends up spacing individual requests
+        // instead of whole batches — without touching the termination reconciliation.
+        let hasDelay = (delay ?? 0) > 0
+        let batchSize = hasDelay ? 1 : max(config.workers, 1)
 
         while true {
             let batch = try store.claimNext(limit: batchSize)
@@ -70,7 +77,7 @@ public actor CrawlEngine {
                 onProgress(CrawlProgress(crawled: crawled, queued: counts.queued, discovered: discovered))
             }
 
-            if let delay = robots.crawlDelay(userAgent: config.userAgent), delay > 0 {
+            if hasDelay, let delay {
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             }
         }
