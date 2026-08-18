@@ -126,6 +126,42 @@ private func runCrawl(config: CrawlConfig? = nil) async throws -> Store {
     #expect(fetched == 1, "only the seed is crawled at depth 0")
 }
 
+@Test func retainBodiesStopsPastRetainBodyURLLimit() async throws {
+    // A tiny limit stands in for the real 50_000 default so the cutoff is reachable
+    // in a fast test. workers = 1 with no crawl-delay makes claimNext process exactly
+    // one URL per iteration, so `crawled` advances deterministically: seed then /a
+    // are fetched while `crawled` is 0 then 1 (both < 2, so both retain their body);
+    // /b and /c are fetched while `crawled` is 2 then 3 (both >= 2, so neither does).
+    let pages: [String: (Int, [String: String], String)] = [
+        "https://tiny.test/": (200, [:], html(title: "Home", body: """
+            <a href="/a">A</a><a href="/b">B</a><a href="/c">C</a>
+            """)),
+        "https://tiny.test/a": (200, [:], html(title: "A", body: "<p>a</p>")),
+        "https://tiny.test/b": (200, [:], html(title: "B", body: "<p>b</p>")),
+        "https://tiny.test/c": (200, [:], html(title: "C", body: "<p>c</p>")),
+    ]
+    let store = try Store(path: nil)
+    try store.migrate()
+    var config = CrawlConfig(seedURL: "https://tiny.test/")
+    config.workers = 1
+    config.retainBodyURLLimit = 2
+    try store.initializeCrawl(config: config, startedAt: Date())
+    _ = try store.insertURLIfNew(URLNormalizer.normalize(config.seedURL, relativeTo: nil)!,
+                                 depth: 0, isInternal: true, discoveredAt: Date())
+
+    let engine = CrawlEngine(store: store, client: FixtureClient(pages: pages),
+                             parser: SwiftSoupParser(), config: config)
+    try await engine.run(onProgress: nil)
+
+    let retained = try await store.dbQueue.read { db in
+        try Int.fetchAll(db, sql: """
+            SELECT (body_gz IS NOT NULL) FROM responses r JOIN urls u ON u.id = r.url_id
+            ORDER BY u.depth ASC, u.id ASC
+            """)
+    }
+    #expect(retained == [1, 1, 0, 0], "bodies retained for the first two crawled URLs, not the rest")
+}
+
 @Test func robotsDisallowSkipsURL() async throws {
     let store = try Store(path: nil)
     try store.migrate()

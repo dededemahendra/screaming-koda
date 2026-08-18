@@ -80,7 +80,21 @@ struct Crawl: AsyncParsableCommand {
             Self.printRobotsUnreachableWarning(reason: reason)
         }
 
-        Self.printSummary(try store.summary(), elapsed: elapsed)
+        let summary = try store.summary()
+        // robots.txt can be fetched and parsed just fine and simply say `Disallow: /`
+        // for everyone — staging sites, or sites that allowlist only specific bots, do
+        // this legitimately, and it's more common in practice than the unreachable case
+        // above. That produces a crawl that fetched nothing, which looks identical to a
+        // broken tool unless something says otherwise. A fetch was attempted for every
+        // URL the engine processed (even a transport failure records a status = 0
+        // response row), so zero rows in `responses` while robots.txt was reachable and
+        // parsed is a reliable signal that robots itself is why nothing was crawled.
+        let totalResponses = summary.byStatusClass.values.reduce(0, +) + summary.transportErrors
+        if robotsOutcome == .parsed, totalResponses == 0 {
+            Self.printRobotsDisallowedAllWarning()
+        }
+
+        Self.printSummary(summary, elapsed: elapsed)
     }
 
     /// Writes one diagnostic/commentary line to stderr, terminated with `\n`.
@@ -118,6 +132,27 @@ struct Crawl: AsyncParsableCommand {
         permission to crawl. This crawl was therefore restricted to
         disallow-all, and likely returned zero (or very few) pages —
         that is expected given the failure, not a bug.
+
+        If you own this site and want to crawl anyway, rerun with
+        --ignore-robots.
+        ============================================================
+        """)
+    }
+
+    /// A robots.txt that was fetched and parsed without any trouble can still disallow
+    /// every path for this crawler — that's a legitimate, deliberate configuration (a
+    /// staging site, or a site that allowlists only specific named bots), not a fetch
+    /// failure. It produces exactly the same empty-looking summary as a broken crawl, so
+    /// without this warning the user has no way to tell "the tool is broken" apart from
+    /// "the site said no."
+    static func printRobotsDisallowedAllWarning() {
+        Self.logLine("""
+        ============================================================
+        WARNING: robots.txt was fetched and parsed successfully, but
+        it disallows this crawler from every page on the site.
+
+        No pages could be fetched as a result — that is expected
+        given robots.txt, not a bug.
 
         If you own this site and want to crawl anyway, rerun with
         --ignore-robots.

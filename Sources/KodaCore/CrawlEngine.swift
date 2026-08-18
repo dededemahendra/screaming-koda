@@ -46,14 +46,22 @@ public actor CrawlEngine {
             let batch = try store.claimNext(limit: batchSize)
             if batch.isEmpty { break }
 
+            // Bodies are only worth retaining while the crawl is small enough that
+            // storing every HTML body doesn't balloon the database — see
+            // `CrawlConfig.retainBodyURLLimit`. Once `crawled` (already tracked here
+            // for progress reporting) passes the limit, newly-fetched bodies stop
+            // being retained; bodies already stored are untouched. Reusing `crawled`
+            // keeps this a plain integer comparison instead of a query per page.
+            let retainBodies = config.retainBodies && crawled < config.retainBodyURLLimit
+
             var results: [CrawlResult] = []
             results.reserveCapacity(batch.count)
 
             await withTaskGroup(of: CrawlResult?.self) { group in
                 for item in batch {
-                    group.addTask { [config, robots, client, parser] in
+                    group.addTask { [config, robots, client, parser, retainBodies] in
                         await Self.process(item: item, config: config, robots: robots,
-                                           client: client, parser: parser)
+                                           client: client, parser: parser, retainBodies: retainBodies)
                     }
                 }
                 for await result in group {
@@ -87,7 +95,7 @@ public actor CrawlEngine {
 
     private static func process(
         item: FrontierItem, config: CrawlConfig, robots: RobotsRules,
-        client: HTTPClient, parser: PageParser
+        client: HTTPClient, parser: PageParser, retainBodies: Bool
     ) async -> CrawlResult? {
         if config.respectRobots, !robots.isAllowed(path: item.url.path, userAgent: config.userAgent) {
             return nil
@@ -116,7 +124,7 @@ public actor CrawlEngine {
             if isHTML, let body = response.body, !body.isEmpty {
                 let html = String(decoding: body, as: UTF8.self)
                 facts = try? parser.parse(html: html)
-                if config.retainBodies { bodyGz = Gzip.compress(body) }
+                if retainBodies { bodyGz = Gzip.compress(body) }
             }
 
             return CrawlResult(

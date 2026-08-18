@@ -3270,7 +3270,7 @@ git commit -m "feat: abandon redirect chains past the hop limit"
 
 ## Deliberately deferred
 
-Three spec items are not in M1. Each is deferred for a stated reason, not overlooked:
+Spec items not in M1. Each is deferred for a stated reason, not overlooked:
 
 **Frontier resume in the CLI.** Resume works at the store level (`resetInFlight`,
 exercised by tests), but the CLI deletes an existing database rather than
@@ -3287,3 +3287,20 @@ lands, and must be implemented then.
 status and byte size. M1 records images and their alt text — enough for the
 missing-alt report — but does not fetch them. Size is only needed for the
 "images over 100KB" filter, which is an M3 report tab; the fetch lands with it.
+
+**External link status-checking.** The spec's defaults table says "External links:
+Status checked, not crawled or parsed." M1 enqueues every external target with
+`enqueue: false` and never fetches it, so external URLs have no `responses` row at
+all — not just an unparsed one. The M3 "External" report tab will have no status
+data until this lands.
+
+**Write-batching cadence.** The spec promises a writer that "flushes every 100 rows
+or 500 ms". The implementation instead couples the DB flush 1:1 to the fetch batch
+(`batchSize = max(config.workers, 1)`, 5 by default), so flushes are ~20x more
+frequent than promised. Not a correctness problem at M1 scale; a real concern at
+the 500k target.
+
+**Character-encoding detection.** Response bodies are always decoded as UTF-8,
+ignoring the `Content-Type` charset and `<meta charset>`. Non-UTF-8 pages (legacy
+Latin-1/Windows-1252 CMSs) will silently produce garbled titles and headings, which
+then feed duplicate-title detection and `content_hash`.

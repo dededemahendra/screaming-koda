@@ -79,6 +79,62 @@ private struct RobotsClient: HTTPClient {
     #expect(result.outcome == .unreachable(reason: "timedOut"))
 }
 
+@Test func rateLimitedRobotsMeansDisallowAll() async {
+    // A 429 is a rate-limit signal, not "there is no robots.txt" — it must not fall
+    // into the 4xx → allow-all bucket alongside a genuine 404.
+    let seed = URLNormalizer.normalize("https://site.test/", relativeTo: nil)!
+    let client = RobotsClient(robotsStatus: 429, robotsBody: "")
+    let result = await CrawlSession.fetchRobots(for: seed, client: client, config: CrawlConfig(seedURL: seed.absoluteString))
+    #expect(!result.rules.isAllowed(path: "/anything", userAgent: "ScreamingKoda/0.1"))
+    #expect(result.outcome == .unreachable(reason: "http 429"))
+}
+
+/// Redirects `/robots.txt` once to another host before serving the real file — the
+/// ordinary case of a bare-domain-to-canonical-host or http-to-https redirect.
+private struct RedirectingRobotsClient: HTTPClient {
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
+        switch url {
+        case "https://redir.test/robots.txt":
+            return .response(HTTPResponse(status: 301, headers: ["Location": "https://redir2.test/robots.txt"],
+                                          body: Data(), elapsedMs: 1))
+        case "https://redir2.test/robots.txt":
+            return .response(HTTPResponse(status: 200, headers: ["Content-Type": "text/plain"],
+                                          body: Data("User-agent: *\nDisallow: /blocked".utf8), elapsedMs: 1))
+        default:
+            return .response(HTTPResponse(status: 404, headers: [:], body: Data(), elapsedMs: 1))
+        }
+    }
+}
+
+@Test func robotsRedirectIsFollowedAndParsed() async {
+    let seed = URLNormalizer.normalize("https://redir.test/", relativeTo: nil)!
+    let result = await CrawlSession.fetchRobots(for: seed, client: RedirectingRobotsClient(),
+                                                config: CrawlConfig(seedURL: seed.absoluteString))
+    #expect(result.outcome == .parsed)
+    #expect(!result.rules.isAllowed(path: "/blocked", userAgent: "ScreamingKoda/0.1"))
+    #expect(result.rules.isAllowed(path: "/allowed", userAgent: "ScreamingKoda/0.1"))
+}
+
+/// Redirects forever, minting a new URL each hop, so dedup/termination can only come
+/// from the hop cap — mirrors `InfiniteRedirectClient` in RedirectChainTests.
+private struct InfiniteRobotsRedirectClient: HTTPClient {
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
+        let next = (Int(url.components(separatedBy: "?n=").last ?? "0") ?? 0) + 1
+        return .response(HTTPResponse(status: 301,
+                                      headers: ["Location": "https://loop.test/robots.txt?n=\(next)"],
+                                      body: Data(), elapsedMs: 1))
+    }
+}
+
+@Test func robotsRedirectChainBeyondCapIsUnreachable() async {
+    let seed = URLNormalizer.normalize("https://loop.test/", relativeTo: nil)!
+    let result = await CrawlSession.fetchRobots(for: seed, client: InfiniteRobotsRedirectClient(),
+                                                config: CrawlConfig(seedURL: seed.absoluteString))
+    #expect(result.outcome == .unreachable(reason: "too many robots.txt redirects"))
+    // Unreachable means disallow-all, not the allow-all a naive "give up and proceed" would produce.
+    #expect(!result.rules.isAllowed(path: "/anything", userAgent: "ScreamingKoda/0.1"))
+}
+
 @Test func outcomeDistinguishesAbsentFromUnreachableFromParsed() async {
     let seed = URLNormalizer.normalize("https://site.test/", relativeTo: nil)!
     let config = CrawlConfig(seedURL: seed.absoluteString)

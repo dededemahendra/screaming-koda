@@ -13,6 +13,8 @@ public struct CrawlConfig: Codable, Sendable {
     public var maxDepth: Int? = nil
     public var urlCap: Int = 500_000
     public var retainBodies: Bool = true
+    /// Once `CrawlEngine` has crawled this many URLs, it stops retaining newly-fetched
+    /// bodies even if `retainBodies` is still true — bodies already stored are untouched.
     public var retainBodyURLLimit: Int = 50_000
     public var include: [String] = []
     public var exclude: [String] = []

@@ -98,6 +98,10 @@ extension Store {
         }
     }
 
+    /// `total` counts every row in `urls`, including image-only rows (an `<img src>`
+    /// target that is never a link or crawl target in its own right) — unlike
+    /// `Store.summary().totalURLs`, which excludes those. The two numbers will
+    /// legitimately differ on any page with images.
     public func urlCounts() throws -> (queued: Int, inFlight: Int, done: Int, total: Int) {
         try dbQueue.read { db in
             func count(_ state: Int) throws -> Int {
