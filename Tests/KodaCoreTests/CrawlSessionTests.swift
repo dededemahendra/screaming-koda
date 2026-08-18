@@ -99,13 +99,31 @@ private struct RobotsClient: HTTPClient {
 @Test func startSeedsFrontierAndCrawls() async throws {
     var config = CrawlConfig(seedURL: "https://site.test/")
     config.workers = 1
-    let store = try await CrawlSession.start(
+    let (store, outcome) = try await CrawlSession.start(
         dbPath: nil, config: config,
         client: RobotsClient(robotsStatus: 404, robotsBody: ""),
         parser: SwiftSoupParser(), onProgress: nil
     )
     let counts = try store.urlCounts()
     #expect(counts.done >= 1)
+    #expect(counts.queued == 0)
+    #expect(outcome == .absent)
+}
+
+@Test func startSurfacesUnreachableRobotsOutcome() async throws {
+    // Task 11's CLI needs `start` (not just `fetchRobots`) to surface the outcome, so it
+    // can explain a legitimately-empty crawl caused by an unreachable robots.txt rather than
+    // silently discarding the reason.
+    var config = CrawlConfig(seedURL: "https://site.test/")
+    config.workers = 1
+    let (store, outcome) = try await CrawlSession.start(
+        dbPath: nil, config: config,
+        client: RobotsClient(robotsStatus: 503, robotsBody: ""),
+        parser: SwiftSoupParser(), onProgress: nil
+    )
+    #expect(outcome == .unreachable(reason: "http 503"))
+    // disallow-all means nothing beyond the seed itself could be crawled.
+    let counts = try store.urlCounts()
     #expect(counts.queued == 0)
 }
 

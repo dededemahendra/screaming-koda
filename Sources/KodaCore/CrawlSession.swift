@@ -65,6 +65,11 @@ public enum CrawlSession {
     }
 
     /// Creates the database, seeds the frontier, fetches robots, and runs the crawl to completion.
+    ///
+    /// Returns the `RobotsFetchOutcome` alongside the `Store` because it is not just an
+    /// internal detail: when robots.txt is `.unreachable`, the crawl runs disallow-all and
+    /// legitimately produces zero (or very few) pages. Callers such as the CLI need this to
+    /// explain an otherwise-mysterious empty result rather than silently discarding it.
     @discardableResult
     public static func start(
         dbPath: String?,
@@ -72,7 +77,7 @@ public enum CrawlSession {
         client: HTTPClient,
         parser: PageParser,
         onProgress: (@Sendable (CrawlProgress) -> Void)?
-    ) async throws -> Store {
+    ) async throws -> (store: Store, robotsOutcome: RobotsFetchOutcome) {
         guard let seed = URLNormalizer.normalize(config.seedURL, relativeTo: nil) else {
             throw CrawlSessionError.invalidSeedURL(config.seedURL)
         }
@@ -82,9 +87,9 @@ public enum CrawlSession {
         try store.initializeCrawl(config: config, startedAt: Date())
         _ = try store.insertURLIfNew(seed, depth: 0, isInternal: true, discoveredAt: Date())
 
-        let (robots, _) = await fetchRobots(for: seed, client: client, config: config)
+        let (robots, outcome) = await fetchRobots(for: seed, client: client, config: config)
         let engine = CrawlEngine(store: store, client: client, parser: parser, config: config, robots: robots)
         try await engine.run(onProgress: onProgress)
-        return store
+        return (store, outcome)
     }
 }
