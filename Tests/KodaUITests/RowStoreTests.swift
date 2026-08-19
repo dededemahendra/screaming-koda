@@ -140,3 +140,38 @@ private func seededStore(pages: Int) throws -> Store {
     rows.refresh()
     #expect(rows.row(at: 2)?.status == nil, "a queued-but-unfetched URL has no status yet")
 }
+
+@MainActor
+@Test func lruEvictsTheLeastRecentlyUsedPageNotTheOldestLoaded() throws {
+    // pageSize 4, maxPages 2, 12 rows -> pages 0, 1, 2. Load page 0 and page 1, then
+    // keep re-reading page 0 so it becomes "hot", then load a third page. A true LRU
+    // cache evicts page 1 (untouched since it loaded); a cache that only updates
+    // eviction order on misses (FIFO wearing an LRU label) would instead evict page 0
+    // -- the page just read ten times -- because a hit never moves it in the queue.
+    // `loadCount` (an internal test seam, not part of the public API) lets the test
+    // tell a cache hit from a reload without reaching into private state.
+    let rows = RowStore(store: try seededStore(pages: 12), pageSize: 4, maxPages: 2)
+    rows.refresh()
+
+    _ = rows.row(at: 0) // loads page 0
+    _ = rows.row(at: 4) // loads page 1
+    #expect(rows.loadCount == 2)
+
+    for _ in 0..<10 {
+        _ = rows.row(at: 0) // repeated hits on page 0; must not evict it
+    }
+    #expect(rows.loadCount == 2, "cache hits must not trigger a reload")
+
+    _ = rows.row(at: 8) // loads page 2, forcing an eviction under maxPages == 2
+    #expect(rows.loadCount == 3)
+
+    let countBeforeRereadingPage0 = rows.loadCount
+    #expect(rows.row(at: 0)?.title == "T0", "page 0 was hot; it must still be cached")
+    #expect(rows.loadCount == countBeforeRereadingPage0,
+            "re-reading the recently-hit page must be a cache hit, not a reload")
+
+    let countBeforeRereadingPage1 = rows.loadCount
+    #expect(rows.row(at: 4)?.title == "T4", "page 1 was cold; it must have been evicted")
+    #expect(rows.loadCount == countBeforeRereadingPage1 + 1,
+            "re-reading the untouched page must require a reload")
+}
