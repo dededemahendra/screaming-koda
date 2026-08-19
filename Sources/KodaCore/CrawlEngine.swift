@@ -6,6 +6,20 @@ public struct CrawlProgress: Sendable {
     public let discovered: Int
 }
 
+public enum CrawlEngineError: Error, CustomStringConvertible {
+    /// `run()` was called while this engine already had a crawl underway
+    /// (running or paused). A public API on an actor shouldn't rely on callers
+    /// serializing their own calls, so a second concurrent `run()` is rejected
+    /// rather than left to race the first on shared state.
+    case alreadyRunning
+
+    public var description: String {
+        switch self {
+        case .alreadyRunning: return "This CrawlEngine already has a crawl running or paused."
+        }
+    }
+}
+
 public actor CrawlEngine {
     private let store: Store
     private let client: HTTPClient
@@ -59,7 +73,18 @@ public actor CrawlEngine {
 
     /// Drains the frontier until nothing is queued, paused, or cancelled. Never
     /// throws on a bad page.
+    ///
+    /// Rejects a second concurrent call while a crawl is already running or
+    /// paused on this engine — two loops racing on `crawled`, `discovered`, and
+    /// `currentState` could let one observe an empty frontier and mark the crawl
+    /// finished while the other is still fetching. Calling `run()` again after
+    /// this engine's crawl has ended (`.finished`, `.cancelled`, or `.failed`) is
+    /// fine and is how a cancelled crawl is resumed.
     public func run(onProgress: (@Sendable (CrawlProgress) -> Void)?) async throws {
+        guard !currentState.isActive else {
+            throw CrawlEngineError.alreadyRunning
+        }
+
         currentState = .running
         isPaused = false
         isCancelled = false

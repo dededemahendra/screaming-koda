@@ -157,3 +157,41 @@ private func waitUntil(timeout: TimeInterval = 5, _ condition: () async -> Bool)
     try await engine.run(onProgress: nil)
     #expect(await engine.state == .finished)
 }
+
+@Test func runWhileAlreadyRunningThrowsAndOriginalCrawlContinues() async throws {
+    let (engine, _, counter, _) = try makeEngine(pageCount: 15)
+    let task = Task { try await engine.run(onProgress: nil) }
+
+    #expect(await waitUntil { await counter.value() >= 3 }, "crawl should get going")
+
+    await #expect(throws: CrawlEngineError.self) {
+        try await engine.run(onProgress: nil)
+    }
+
+    try await task.value
+    #expect(await engine.state == .finished, "the original crawl was unaffected and reached a normal end state")
+}
+
+@Test func runAgainAfterFinishedDoesNotThrow() async throws {
+    let (engine, _, _, _) = try makeEngine(pageCount: 3)
+    try await engine.run(onProgress: nil)
+    #expect(await engine.state == .finished)
+
+    try await engine.run(onProgress: nil)
+    #expect(await engine.state == .finished, "re-running the same engine after it finished is allowed")
+}
+
+@Test func runAgainAfterCancelledDoesNotThrow() async throws {
+    let (engine, store, counter, _) = try makeEngine(pageCount: 12)
+    let task = Task { try await engine.run(onProgress: nil) }
+    #expect(await waitUntil { await counter.value() >= 3 })
+    await engine.cancel()
+    _ = try? await task.value
+    #expect(await engine.state == .cancelled)
+
+    let afterCancel = try store.urlCounts().done
+    try await engine.run(onProgress: nil)
+
+    #expect(await engine.state == .finished, "re-running the same engine after it was cancelled is allowed")
+    #expect(try store.urlCounts().done > afterCancel, "the resumed run continues where it stopped")
+}
