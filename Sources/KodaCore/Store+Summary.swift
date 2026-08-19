@@ -30,23 +30,9 @@ extension Store {
                 byClass["\(cls)xx"] = row["n"]
             }
 
-            // Image `<img src>` targets get their own row in `urls` (see Store+Write's
-            // `upsertURL(..., enqueue: false)` for images), but they are resources, not
-            // pages — they must not inflate the URL counts a report shows for the site.
-            // A URL is only excluded when it exists *solely* as an image source: if it was
-            // ever actually fetched (has a `responses` row) or is also a normal link target
-            // (`links.to_url_id`), it's a real page that happens to also be embedded as an
-            // image somewhere, and must still be counted. `urls` is deduplicated by
-            // `url_hash`, so such a URL collapses to a single row — excluding by identity
-            // alone (as an earlier version of this query did) would drop it entirely.
-            // `imagesMissingAlt` below queries the `images` table directly and is unaffected.
-            let notImageOnly = """
-                u.id NOT IN (
-                  SELECT src_url_id FROM images
-                  WHERE src_url_id NOT IN (SELECT url_id FROM responses)
-                    AND src_url_id NOT IN (SELECT to_url_id FROM links)
-                )
-                """
+            // See `Store.visibleURLsFilter` for the rationale. `imagesMissingAlt` below
+            // queries the `images` table directly and is unaffected by this filter.
+            let notImageOnly = Store.visibleURLsFilter
             return CrawlSummary(
                 totalURLs: try count("SELECT count(*) FROM urls u WHERE \(notImageOnly)"),
                 internalURLs: try count("SELECT count(*) FROM urls u WHERE u.is_internal = 1 AND \(notImageOnly)"),

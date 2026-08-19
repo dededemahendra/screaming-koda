@@ -4,6 +4,28 @@ import GRDB
 public final class Store: @unchecked Sendable {
     public let dbQueue: DatabaseQueue
 
+    /// A URL counts as "found" unless it exists *solely* as an image source: `<img src>`
+    /// targets get their own row in `urls` (see `Store+Write`'s `upsertURL(..., enqueue:
+    /// false)` for images), but they are resources, not pages — they must not inflate the
+    /// URL counts a report or the crawl table shows for the site. A URL is only excluded
+    /// when it was never actually fetched (no `responses` row) and is never a normal link
+    /// target (`links.to_url_id`); if either is true, it's a real page that happens to also
+    /// be embedded as an image somewhere, and must still be counted. `urls` is deduplicated
+    /// by `url_hash`, so such a URL collapses to a single row — excluding by identity alone
+    /// would drop it entirely.
+    ///
+    /// Shared by `Store.summary()` and `KodaUI.RowStore` so the summary report and the crawl
+    /// table can never disagree about how many URLs a crawl found — the two had a single
+    /// hand-maintained-twice divergence in M1 that this constant exists to prevent from
+    /// recurring. References `u` as the alias for `urls` in the enclosing query.
+    public static let visibleURLsFilter = """
+        u.id NOT IN (
+          SELECT src_url_id FROM images
+          WHERE src_url_id NOT IN (SELECT url_id FROM responses)
+            AND src_url_id NOT IN (SELECT to_url_id FROM links)
+        )
+        """
+
     /// - Parameter path: file path, or nil for an in-memory database (tests).
     public init(path: String?) throws {
         var config = Configuration()
