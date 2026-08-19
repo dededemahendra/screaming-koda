@@ -17,6 +17,8 @@ public final class CrawlController {
     /// silently ambiguous.
     public private(set) var notice: String?
     public private(set) var rows: RowStore?
+    /// Bumped on every tick so the table knows to reload.
+    public private(set) var revision = 0
 
     @ObservationIgnored private let client: HTTPClient
     @ObservationIgnored private let parser: PageParser
@@ -84,6 +86,7 @@ public final class CrawlController {
             await MainActor.run {
                 self.state = finalState
                 self.rows?.refresh()
+                self.revision &+= 1
                 self.explainEmptyCrawlIfNeeded(store: store)
                 self.stopTicking()
             }
@@ -127,6 +130,7 @@ public final class CrawlController {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 guard let self, self.state.isActive else { return }
                 self.rows?.refresh()
+                self.revision &+= 1
             }
         }
     }
