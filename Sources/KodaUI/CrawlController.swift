@@ -23,32 +23,69 @@ public final class CrawlController {
     @ObservationIgnored private let client: HTTPClient
     @ObservationIgnored private let parser: PageParser
     @ObservationIgnored private let dbPath: String?
+    @ObservationIgnored private let dbPathForHost: (@MainActor @Sendable (String) throws -> (path: String, replacedExisting: Bool))?
     @ObservationIgnored private var engine: CrawlEngine?
     @ObservationIgnored private var runTask: Task<Void, Never>?
     @ObservationIgnored private var tickTask: Task<Void, Never>?
+    /// Tracks whether the robots-unreachable notice was already shown this run,
+    /// independent of whatever else `notice` may also contain (such as a
+    /// "database replaced" message set earlier in `start()`) — the emptiness
+    /// explanation below must not be suppressed just because *some* notice
+    /// happens to already be set for an unrelated reason.
+    @ObservationIgnored private var robotsUnreachableNoticeShown = false
 
+    /// - Parameters:
+    ///   - dbPath: A fixed database path, or nil for an in-memory database.
+    ///     This is the default and is what every existing test relies on —
+    ///     it must keep meaning "in-memory" unqualified.
+    ///   - dbPathForHost: When set, overrides `dbPath` at `start()` time by
+    ///     computing a real path from the seed's host. This is how the
+    ///     shipped app (composed in `KodaApp`) makes crawls durable without
+    ///     changing what a bare `CrawlController()` does for tests — the
+    ///     resolution has to happen here, at `start()`, because the host
+    ///     isn't known until the user has typed a seed URL, which is after
+    ///     construction.
     public init(
         client: HTTPClient = URLSessionHTTPClient(),
         parser: PageParser = SwiftSoupParser(),
-        dbPath: String? = nil
+        dbPath: String? = nil,
+        dbPathForHost: (@MainActor @Sendable (String) throws -> (path: String, replacedExisting: Bool))? = nil
     ) {
         self.client = client
         self.parser = parser
         self.dbPath = dbPath
+        self.dbPathForHost = dbPathForHost
     }
 
     public func start() async {
         guard !state.isActive else { return }
         notice = nil
         progress = nil
+        robotsUnreachableNoticeShown = false
 
         var config = CrawlConfig(seedURL: seedURL)
         config.workers = 5
 
+        var resolvedDBPath = dbPath
+        if let dbPathForHost, let host = config.seedHost {
+            do {
+                let resolved = try dbPathForHost(host)
+                resolvedDBPath = resolved.path
+                if resolved.replacedExisting {
+                    notice = appendNotice(notice, "A previous crawl database for \(host) already "
+                        + "existed and was replaced — resuming an existing crawl isn't supported yet.")
+                }
+            } catch {
+                notice = "Cannot start: \(error)"
+                state = .idle
+                return
+            }
+        }
+
         let prepared: (engine: CrawlEngine, store: Store, robotsOutcome: RobotsFetchOutcome)
         do {
             prepared = try await CrawlSession.prepare(
-                dbPath: dbPath, config: config, client: client, parser: parser
+                dbPath: resolvedDBPath, config: config, client: client, parser: parser
             )
         } catch {
             notice = "Cannot start: \(error)"
@@ -57,8 +94,10 @@ public final class CrawlController {
         }
 
         if case .unreachable(let reason) = prepared.robotsOutcome {
-            notice = "robots.txt could not be fetched (\(reason)), so this crawl is restricted to nothing. "
-                + "Re-run against a site you own with robots checking disabled if that is not what you want."
+            notice = appendNotice(notice, "robots.txt could not be fetched (\(reason)), so this crawl is "
+                + "restricted to nothing. Re-run against a site you own with robots checking disabled if "
+                + "that is not what you want.")
+            robotsUnreachableNoticeShown = true
         }
 
         engine = prepared.engine
@@ -112,15 +151,26 @@ public final class CrawlController {
     }
 
     /// A crawl that fetched nothing because robots.txt disallowed it looks
-    /// identical to a broken tool. Say which it was.
+    /// identical to a broken tool. Say which it was — unless the
+    /// robots-unreachable notice already explained the emptiness, which would
+    /// make this one redundant.
     private func explainEmptyCrawlIfNeeded(store: Store) {
-        guard notice == nil else { return }
+        guard !robotsUnreachableNoticeShown else { return }
         guard let summary = try? store.summary() else { return }
         let fetched = summary.byStatusClass.values.reduce(0, +) + summary.transportErrors
         if fetched == 0 {
-            notice = "Nothing was crawled: robots.txt disallows this crawler. "
-                + "Nothing is wrong with the app — the site is asking not to be crawled."
+            notice = appendNotice(notice, "Nothing was crawled: robots.txt disallows this crawler. "
+                + "Nothing is wrong with the app — the site is asking not to be crawled.")
         }
+    }
+
+    /// Joins a new notice onto whatever is already there, rather than
+    /// overwriting it — `start()` can have a legitimate reason to show more
+    /// than one thing (e.g. "the old database was replaced" and "robots.txt
+    /// disallows everything" are both true and both worth telling the user).
+    private func appendNotice(_ existing: String?, _ addition: String) -> String {
+        guard let existing, !existing.isEmpty else { return addition }
+        return existing + "\n\n" + addition
     }
 
     private func startTicking() {

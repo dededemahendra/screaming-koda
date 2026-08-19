@@ -107,3 +107,57 @@ private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) async
 
     #expect(await waitUntil { (c.progress?.crawled ?? 0) > 0 }, "progress reaches the controller")
 }
+
+/// Item 1 of the M2 final review: the shipped app must write a real file, not an
+/// in-memory database, and `CrawlController` is where that resolution has to happen
+/// (the host isn't known until the user has typed a seed URL). `dbPathForHost` is the
+/// injection point the app composes through; these tests exercise it exactly the way
+/// `KodaApp.resolveDBPath` does, but pointed at a scratch directory instead of the
+/// user's real Application Support folder.
+@MainActor
+@Test func aControllerWithDBPathForHostWritesARealFileOnDisk() async {
+    let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+    let c = CrawlController(client: ThreePageClient(), parser: SwiftSoupParser(), dbPathForHost: { host in
+        let result = try CrawlDatabaseLocation.prepare(forHost: host, appSupport: tempRoot)
+        return (result.path, result.outcome == .replacedExisting)
+    })
+    c.seedURL = "https://three.test/"
+    await c.start()
+    #expect(await waitUntil { c.state == .finished })
+
+    let expected = CrawlDatabaseLocation.path(
+        forHost: "three.test", in: CrawlDatabaseLocation.crawlsDirectory(appSupport: tempRoot)
+    )
+    #expect(FileManager.default.fileExists(atPath: expected.path),
+            "a real .koda file must exist on disk once the crawl finishes")
+    #expect(c.notice == nil, "the first crawl of a host must not claim anything was replaced")
+}
+
+@MainActor
+@Test func reCrawlingTheSameHostReplacesTheOldDatabaseAndSaysSo() async {
+    let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: tempRoot) }
+    let resolver: @MainActor @Sendable (String) throws -> (path: String, replacedExisting: Bool) = { host in
+        let result = try CrawlDatabaseLocation.prepare(forHost: host, appSupport: tempRoot)
+        return (result.path, result.outcome == .replacedExisting)
+    }
+
+    let first = CrawlController(client: ThreePageClient(), parser: SwiftSoupParser(), dbPathForHost: resolver)
+    first.seedURL = "https://three.test/"
+    await first.start()
+    #expect(await waitUntil { first.state == .finished })
+
+    // A brand new controller, standing in for the user quitting and relaunching the
+    // app, then crawling the same host again.
+    let second = CrawlController(client: ThreePageClient(), parser: SwiftSoupParser(), dbPathForHost: resolver)
+    second.seedURL = "https://three.test/"
+    await second.start()
+    #expect(await waitUntil { second.state == .finished })
+
+    let notice = second.notice ?? ""
+    #expect(notice.lowercased().contains("replaced"),
+            "re-crawling the same host must say the old database was replaced; got: \(notice)")
+    #expect((second.rows?.count ?? 0) >= 3, "the new crawl's own rows must still show up")
+}
