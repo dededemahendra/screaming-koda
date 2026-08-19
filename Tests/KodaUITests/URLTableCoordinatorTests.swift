@@ -118,17 +118,25 @@ private func seededRows(pages: Int) throws -> RowStore {
 /// AppKit's real reuse pool is populated by internal view teardown during
 /// actual on-screen scrolling/display, which never fires without a running
 /// `NSApplication` and a live window — confirmed empirically while writing
-/// this test (see task-6-report.md's fix-round section): even with a real
+/// this test (see task-6-report.md's fix-round sections): even with a real
 /// `NSWindow`/`NSScrollView` hierarchy, forced layout, and `scrollRowToVisible`
 /// past the row that was first drawn, `makeView(withIdentifier:owner:)`
 /// returned `nil` rather than handing back the earlier cell. So this cannot
-/// assert object identity across a reuse cycle. Instead it asserts the
-/// property that actually guards against the regression the review is
-/// worried about — the `stringValue` assignment sliding from after the
-/// reuse/create branches merge into only one of them: a cell requested for
-/// row N, through the same table view and column, always carries row N's own
-/// value, never a value left over from a different row requested earlier in
-/// the same sequence.
+/// assert object identity across a reuse cycle, and under `swift test` every
+/// call here takes the freshly-created-cell path in `viewFor` — the reuse
+/// branch is never actually executed.
+///
+/// This test only covers wiring: that `viewFor`, called repeatedly through
+/// the same table view and column, always hands back the requested row's own
+/// value rather than a value left over from an earlier call. It does NOT, by
+/// itself, guard against a `stringValue` assignment sliding into only one of
+/// `viewFor`'s two branches — under `makeView` always returning nil here,
+/// that mutation would be invisible to this test no matter how the rows are
+/// sequenced. What actually closes that gap is that `viewFor` no longer has
+/// two assignment sites to slide into: both branches call the single
+/// `configure(_:column:row:)` method below, and `configure` is tested
+/// directly, against a cell that already carries the wrong text, further
+/// down this file.
 @MainActor
 @Test func viewForNeverCarriesAStaleNeighboursText() throws {
     let coordinator = URLTableCoordinator(rows: try seededRows(pages: 5))
@@ -161,4 +169,57 @@ private func seededRows(pages: Int) throws -> RowStore {
 
     let view = try #require(coordinator.tableView(table, viewFor: column, row: 99) as? NSTableCellView)
     #expect(view.textField?.stringValue == "")
+}
+
+// MARK: - configure(_:column:row:)
+//
+// `viewFor`'s reuse and create branches both funnel into this one method, so
+// there is exactly one place a cell's text gets set. These tests target that
+// method head-on, by handing it a cell that already carries the wrong text —
+// exactly the shape a real reused `NSTableCellView` would have — without
+// needing AppKit to ever actually reuse one.
+
+@MainActor
+private func staleCell() -> NSTableCellView {
+    let cell = NSTableCellView()
+    let field = NSTextField(labelWithString: "STALE FROM ANOTHER ROW")
+    cell.textField = field
+    return cell
+}
+
+@MainActor
+@Test func configureOverwritesStaleTextWithTheRowsOwnValue() throws {
+    let coordinator = URLTableCoordinator(rows: try seededRows(pages: 5))
+    let cell = staleCell()
+
+    coordinator.configure(cell, column: .address, row: 3)
+
+    #expect(cell.textField?.stringValue == "https://t.test/3")
+}
+
+@MainActor
+@Test func configureOverwritesStaleTextWithEmptyWhenTheRowHasNoValue() throws {
+    let store = try Store(path: nil)
+    try store.migrate()
+    try store.initializeCrawl(config: CrawlConfig(seedURL: "https://t.test/"), startedAt: Date())
+    try store.dbQueue.write { db in
+        try db.execute(
+            sql: """
+                INSERT INTO urls (url, url_hash, host, path, depth, is_internal, discovered_at, state, redirect_hops)
+                VALUES (?,?,?,?,0,1,0,0,0)
+                """,
+            arguments: ["https://t.test/queued", Data("hq".utf8), "t.test", "/queued"]
+        )
+    }
+    let rows = RowStore(store: store)
+    rows.refresh()
+    let coordinator = URLTableCoordinator(rows: rows)
+    let cell = staleCell()
+
+    coordinator.configure(cell, column: .status, row: 0)
+
+    #expect(
+        cell.textField?.stringValue == "",
+        "a stale value must not survive when the new value is empty"
+    )
 }

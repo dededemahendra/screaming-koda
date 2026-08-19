@@ -73,8 +73,22 @@ public final class URLTableCoordinator: NSObject, NSTableViewDataSource, NSTable
                 field.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
             ])
         }
-        cell.textField?.stringValue = value(for: column, row: row)
+        configure(cell, column: column, row: row)
         return cell
+    }
+
+    /// The single assignment site for a cell's text, reachable from both the
+    /// reused and freshly-created paths in `tableView(_:viewFor:row:)`. AppKit's
+    /// reuse pool cannot be driven under `swift test` (it's populated only by
+    /// real on-screen scrolling/display under a running `NSApplication`), so a
+    /// stringValue assignment that lived directly in `viewFor` and got moved
+    /// into only one branch could ship with the reuse branch never exercised in
+    /// tests. Routing both branches through this one method removes that as a
+    /// possible mistake — there is no second branch left to accidentally skip —
+    /// and makes the population step itself directly testable by handing it a
+    /// pre-populated cell, without needing AppKit to ever actually reuse one.
+    func configure(_ cell: NSTableCellView, column: URLTableColumn, row: Int) {
+        cell.textField?.stringValue = value(for: column, row: row)
     }
 }
 
