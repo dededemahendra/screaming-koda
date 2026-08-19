@@ -15,6 +15,9 @@ public actor CrawlEngine {
 
     private var crawled = 0
     private var discovered = 0
+    private var isPaused = false
+    private var isCancelled = false
+    private var currentState: CrawlState = .idle
 
     public init(
         store: Store,
@@ -30,67 +33,116 @@ public actor CrawlEngine {
         self.robots = robots
     }
 
-    /// Drains the frontier until nothing is queued. Never throws on a bad page.
+    public var state: CrawlState { currentState }
+
+    /// Stops claiming new batches. The in-flight batch still finishes and is
+    /// written — fetched work is never discarded.
+    public func pause() {
+        guard currentState == .running else { return }
+        isPaused = true
+        currentState = .paused
+    }
+
+    public func resume() {
+        guard currentState == .paused else { return }
+        isPaused = false
+        currentState = .running
+    }
+
+    /// Stops the crawl. The in-flight batch finishes and is written, then
+    /// claimed-but-unproduced rows return to the queue so a restart continues.
+    public func cancel() {
+        guard currentState.isActive else { return }
+        isCancelled = true
+        isPaused = false
+    }
+
+    /// Drains the frontier until nothing is queued, paused, or cancelled. Never
+    /// throws on a bad page.
     public func run(onProgress: (@Sendable (CrawlProgress) -> Void)?) async throws {
-        try store.resetInFlight()
-        let delay = robots.crawlDelay(userAgent: config.userAgent)
-        // A crawl-delay directive means requests must be serialized and spaced by
-        // that delay, not fired in a `workers`-wide concurrent burst every interval.
-        // Driving the batch size to 1 makes each loop iteration process exactly one
-        // URL, so the per-iteration sleep below ends up spacing individual requests
-        // instead of whole batches — without touching the termination reconciliation.
-        let hasDelay = (delay ?? 0) > 0
-        let batchSize = hasDelay ? 1 : max(config.workers, 1)
+        currentState = .running
+        isPaused = false
+        isCancelled = false
 
-        while true {
-            let batch = try store.claimNext(limit: batchSize)
-            if batch.isEmpty { break }
+        do {
+            try store.resetInFlight()
 
-            // Bodies are only worth retaining while the crawl is small enough that
-            // storing every HTML body doesn't balloon the database — see
-            // `CrawlConfig.retainBodyURLLimit`. Once `crawled` (already tracked here
-            // for progress reporting) passes the limit, newly-fetched bodies stop
-            // being retained; bodies already stored are untouched. Reusing `crawled`
-            // keeps this a plain integer comparison instead of a query per page.
-            let retainBodies = config.retainBodies && crawled < config.retainBodyURLLimit
+            let delay = robots.crawlDelay(userAgent: config.userAgent)
+            // A crawl-delay directive means requests must be serialized and spaced by
+            // that delay, not fired in a `workers`-wide concurrent burst every interval.
+            // Driving the batch size to 1 makes each loop iteration process exactly one
+            // URL, so the per-iteration sleep below ends up spacing individual requests
+            // instead of whole batches — without touching the termination reconciliation.
+            let hasDelay = (delay ?? 0) > 0
+            let batchSize = hasDelay ? 1 : max(config.workers, 1)
 
-            var results: [CrawlResult] = []
-            results.reserveCapacity(batch.count)
+            while true {
+                // Pausing waits here, between batches, where there is no
+                // in-flight state to lose. Polling rather than a stored
+                // continuation: marginally less elegant, much harder to deadlock.
+                while isPaused && !isCancelled {
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                }
+                if isCancelled { break }
 
-            await withTaskGroup(of: CrawlResult?.self) { group in
-                for item in batch {
-                    group.addTask { [config, robots, client, parser, retainBodies] in
-                        await Self.process(item: item, config: config, robots: robots,
-                                           client: client, parser: parser, retainBodies: retainBodies)
+                let batch = try store.claimNext(limit: batchSize)
+                if batch.isEmpty { break }
+
+                // Bodies are only worth retaining while the crawl is small enough that
+                // storing every HTML body doesn't balloon the database — see
+                // `CrawlConfig.retainBodyURLLimit`. Once `crawled` (already tracked here
+                // for progress reporting) passes the limit, newly-fetched bodies stop
+                // being retained; bodies already stored are untouched. Reusing `crawled`
+                // keeps this a plain integer comparison instead of a query per page.
+                let retainBodies = config.retainBodies && crawled < config.retainBodyURLLimit
+
+                var results: [CrawlResult] = []
+                results.reserveCapacity(batch.count)
+
+                await withTaskGroup(of: CrawlResult?.self) { group in
+                    for item in batch {
+                        group.addTask { [config, robots, client, parser, retainBodies] in
+                            await Self.process(item: item, config: config, robots: robots,
+                                               client: client, parser: parser, retainBodies: retainBodies)
+                        }
+                    }
+                    for await result in group {
+                        if let result { results.append(result) }
                     }
                 }
-                for await result in group {
-                    if let result { results.append(result) }
+
+                // URLs skipped by robots produce no result; close them out so they leave the frontier.
+                let produced = Set(results.map(\.urlID))
+                for item in batch where !produced.contains(item.id) {
+                    try store.markSkipped(item.id)
+                }
+
+                if !results.isEmpty {
+                    discovered += try store.write(results: results, config: config, now: Date())
+                    crawled += results.count
+                }
+
+                if let onProgress {
+                    let counts = try store.urlCounts()
+                    onProgress(CrawlProgress(crawled: crawled, queued: counts.queued, discovered: discovered))
+                }
+
+                if hasDelay, let delay {
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                 }
             }
 
-            // URLs skipped by robots produce no result; close them out so they leave the frontier.
-            let produced = Set(results.map(\.urlID))
-            for item in batch where !produced.contains(item.id) {
-                try store.markSkipped(item.id)
+            if isCancelled {
+                try store.resetInFlight()
+                currentState = .cancelled
+            } else {
+                try store.markFinished(at: Date())
+                currentState = .finished
             }
-
-            if !results.isEmpty {
-                discovered += try store.write(results: results, config: config, now: Date())
-                crawled += results.count
-            }
-
-            if let onProgress {
-                let counts = try store.urlCounts()
-                onProgress(CrawlProgress(crawled: crawled, queued: counts.queued, discovered: discovered))
-            }
-
-            if hasDelay, let delay {
-                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            }
+        } catch {
+            currentState = .failed("\(error)")
+            throw error
         }
-
-        try store.markFinished(at: Date())
     }
 
     private static func process(
