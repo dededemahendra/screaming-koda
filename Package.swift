@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .library(name: "KodaCore", targets: ["KodaCore"]),
         .executable(name: "koda", targets: ["koda"]),
+        .executable(name: "KodaApp", targets: ["KodaApp"]),
     ],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.29.3"),
@@ -37,6 +38,21 @@ let package = Package(
                 .product(name: "Testing", package: "swift-testing"),
             ],
             resources: [.copy("Fixtures")]
+        ),
+        .target(
+            name: "KodaUI",
+            dependencies: ["KodaCore"]
+        ),
+        .executableTarget(
+            name: "KodaApp",
+            dependencies: ["KodaUI"]
+        ),
+        .testTarget(
+            name: "KodaUITests",
+            dependencies: [
+                "KodaUI",
+                .product(name: "Testing", package: "swift-testing"),
+            ]
         ),
     ]
 )
