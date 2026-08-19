@@ -93,6 +93,30 @@ public enum CrawlSession {
         return (.disallowAll, .unreachable(reason: "too many robots.txt redirects"))
     }
 
+    /// Creates the database, seeds the frontier, and fetches robots.txt, then
+    /// hands back an engine that has NOT been run. The caller owns the task, so
+    /// it can pause, resume, or cancel while the crawl is underway.
+    public static func prepare(
+        dbPath: String?,
+        config: CrawlConfig,
+        client: HTTPClient,
+        parser: PageParser
+    ) async throws -> (engine: CrawlEngine, store: Store, robotsOutcome: RobotsFetchOutcome) {
+        guard let seed = URLNormalizer.normalize(config.seedURL, relativeTo: nil) else {
+            throw CrawlSessionError.invalidSeedURL(config.seedURL)
+        }
+
+        let store = try Store(path: dbPath)
+        try store.migrate()
+        try store.initializeCrawl(config: config, startedAt: Date())
+        _ = try store.insertURLIfNew(seed, depth: 0, isInternal: true, discoveredAt: Date())
+
+        let (robots, outcome) = await fetchRobots(for: seed, client: client, config: config)
+        let engine = CrawlEngine(store: store, client: client, parser: parser,
+                                 config: config, robots: robots)
+        return (engine, store, outcome)
+    }
+
     /// Creates the database, seeds the frontier, fetches robots, and runs the crawl to completion.
     ///
     /// Returns the `RobotsFetchOutcome` alongside the `Store` because it is not just an
@@ -107,17 +131,9 @@ public enum CrawlSession {
         parser: PageParser,
         onProgress: (@Sendable (CrawlProgress) -> Void)?
     ) async throws -> (store: Store, robotsOutcome: RobotsFetchOutcome) {
-        guard let seed = URLNormalizer.normalize(config.seedURL, relativeTo: nil) else {
-            throw CrawlSessionError.invalidSeedURL(config.seedURL)
-        }
-
-        let store = try Store(path: dbPath)
-        try store.migrate()
-        try store.initializeCrawl(config: config, startedAt: Date())
-        _ = try store.insertURLIfNew(seed, depth: 0, isInternal: true, discoveredAt: Date())
-
-        let (robots, outcome) = await fetchRobots(for: seed, client: client, config: config)
-        let engine = CrawlEngine(store: store, client: client, parser: parser, config: config, robots: robots)
+        let (engine, store, outcome) = try await prepare(
+            dbPath: dbPath, config: config, client: client, parser: parser
+        )
         try await engine.run(onProgress: onProgress)
         return (store, outcome)
     }
