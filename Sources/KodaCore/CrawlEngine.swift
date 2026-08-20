@@ -110,7 +110,7 @@ public actor CrawlEngine {
                 }
                 if isCancelled { break }
 
-                let batch = try store.claimNext(limit: batchSize)
+                let batch = try store.claimNext(limit: batchSize, maxPerHost: config.maxPerHost)
                 if batch.isEmpty { break }
 
                 // Bodies are only worth retaining while the crawl is small enough that

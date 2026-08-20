@@ -26,9 +26,9 @@ private func u(_ s: String) -> NormalizedURL {
     _ = try store.insertURLIfNew(u("http://example.com/a"), depth: 0, isInternal: true, discoveredAt: Date())
     _ = try store.insertURLIfNew(u("http://example.com/b"), depth: 1, isInternal: true, discoveredAt: Date())
 
-    let batch = try store.claimNext(limit: 10)
+    let batch = try store.claimNext(limit: 10, maxPerHost: 10)
     #expect(batch.count == 2)
-    #expect(try store.claimNext(limit: 10).isEmpty)
+    #expect(try store.claimNext(limit: 10, maxPerHost: 10).isEmpty)
     #expect(try store.urlCounts().inFlight == 2)
 }
 
@@ -36,14 +36,14 @@ private func u(_ s: String) -> NormalizedURL {
     let store = try makeStore()
     _ = try store.insertURLIfNew(u("http://example.com/deep"), depth: 5, isInternal: true, discoveredAt: Date())
     _ = try store.insertURLIfNew(u("http://example.com/shallow"), depth: 0, isInternal: true, discoveredAt: Date())
-    let batch = try store.claimNext(limit: 1)
+    let batch = try store.claimNext(limit: 1, maxPerHost: 10)
     #expect(batch.first?.url.path == "/shallow")
 }
 
 @Test func markDoneRemovesFromFrontier() throws {
     let store = try makeStore()
     let id = try store.insertURLIfNew(u("http://example.com/a"), depth: 0, isInternal: true, discoveredAt: Date())
-    _ = try store.claimNext(limit: 10)
+    _ = try store.claimNext(limit: 10, maxPerHost: 10)
     try store.markDone(id)
     let counts = try store.urlCounts()
     #expect(counts.done == 1)
@@ -55,19 +55,19 @@ private func u(_ s: String) -> NormalizedURL {
     let store = try makeStore()
     _ = try store.insertURLIfNew(u("http://example.com/a"), depth: 0, isInternal: true, discoveredAt: Date())
     _ = try store.insertURLIfNew(u("http://example.com/b"), depth: 0, isInternal: true, discoveredAt: Date())
-    _ = try store.claimNext(limit: 10)
+    _ = try store.claimNext(limit: 10, maxPerHost: 10)
 
     let reset = try store.resetInFlight()
 
     #expect(reset == 2)
     #expect(try store.urlCounts().queued == 2)
-    #expect(try store.claimNext(limit: 10).count == 2)
+    #expect(try store.claimNext(limit: 10, maxPerHost: 10).count == 2)
 }
 
 @Test func frontierItemCarriesDepth() throws {
     let store = try makeStore()
     _ = try store.insertURLIfNew(u("http://example.com/a"), depth: 4, isInternal: true, discoveredAt: Date())
-    #expect(try store.claimNext(limit: 1).first?.depth == 4)
+    #expect(try store.claimNext(limit: 1, maxPerHost: 10).first?.depth == 4)
 }
 
 @Test func claimNextMarksUnrenormalizableRowSkippedInsteadOfStranding() throws {
@@ -89,7 +89,7 @@ private func u(_ s: String) -> NormalizedURL {
         return db.lastInsertedRowID
     }
 
-    let batch = try store.claimNext(limit: 10)
+    let batch = try store.claimNext(limit: 10, maxPerHost: 10)
 
     // The malformed row is not handed back to the caller...
     #expect(batch.map(\.id) == [goodID])

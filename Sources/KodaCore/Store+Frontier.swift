@@ -5,6 +5,9 @@ public struct FrontierItem: Sendable {
     public let id: Int64
     public let url: NormalizedURL
     public let depth: Int
+    /// True when this URL is only to be status-checked (HEAD), never parsed —
+    /// an external link or an image source.
+    public let checkOnly: Bool
 }
 
 extension Store {
@@ -49,12 +52,24 @@ extension Store {
     /// in-flight forever — otherwise it would silently strand the frontier: nothing
     /// else moves a row out of the in-flight state, and `claimNext` only ever selects
     /// queued rows, so the row would never be crawled and never complete.
-    public func claimNext(limit: Int) throws -> [FrontierItem] {
+    public func claimNext(limit: Int, maxPerHost: Int) throws -> [FrontierItem] {
         try dbQueue.write { db in
+            // ROW_NUMBER() partitions the queue by host so one crowded host cannot
+            // fill a batch. Requires SQLite 3.25+; macOS 14 ships 3.43+ and this
+            // machine has 3.51.
             let rows = try Row.fetchAll(
                 db,
-                sql: "SELECT id, url, depth FROM urls WHERE state = 0 ORDER BY depth ASC, id ASC LIMIT ?",
-                arguments: [limit]
+                sql: """
+                    SELECT id, url, depth, check_only FROM (
+                      SELECT id, url, depth, check_only, host,
+                             ROW_NUMBER() OVER (PARTITION BY host ORDER BY depth ASC, id ASC) AS rn
+                      FROM urls WHERE state = 0
+                    )
+                    WHERE rn <= ?
+                    ORDER BY depth ASC, id ASC
+                    LIMIT ?
+                    """,
+                arguments: [max(maxPerHost, 1), limit]
             )
             guard !rows.isEmpty else { return [] }
             let ids = rows.map { $0["id"] as Int64 }
@@ -68,7 +83,8 @@ extension Store {
             for row in rows {
                 let id: Int64 = row["id"]
                 if let normalized = URLNormalizer.normalize(row["url"], relativeTo: nil) {
-                    items.append(FrontierItem(id: id, url: normalized, depth: row["depth"]))
+                    items.append(FrontierItem(id: id, url: normalized, depth: row["depth"],
+                                              checkOnly: (row["check_only"] as Int) != 0))
                 } else {
                     try Self.setState(db, id: id, state: 3)
                 }

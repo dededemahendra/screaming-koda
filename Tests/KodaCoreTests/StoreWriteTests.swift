@@ -56,7 +56,7 @@ private func makeFacts(links: [LinkFact] = [], images: [ImageFact] = [], hreflan
 
     #expect(discovered == 2)
     #expect(try store.urlCounts().queued == 2)
-    #expect(try store.claimNext(limit: 10).first?.depth == 1, "children are one level deeper than the parent")
+    #expect(try store.claimNext(limit: 10, maxPerHost: 10).first?.depth == 1, "children are one level deeper than the parent")
 }
 
 @Test func linkRowsRecordAnchorAndRel() throws {
