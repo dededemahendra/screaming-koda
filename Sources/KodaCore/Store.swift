@@ -129,6 +129,16 @@ public final class Store: @unchecked Sendable {
         m.registerMigration("v2-redirect-hops") { db in
             try db.execute(sql: "ALTER TABLE urls ADD COLUMN redirect_hops INTEGER NOT NULL DEFAULT 0")
         }
+        m.registerMigration("v3-check-only") { db in
+            // Status-checked URLs (external links, images) reuse the frontier rather
+            // than a second pipeline: this flag is what tells the engine to HEAD the
+            // URL and skip parsing. The two indexes back the table's new sort columns.
+            try db.execute(sql: """
+                ALTER TABLE urls ADD COLUMN check_only INTEGER NOT NULL DEFAULT 0;
+                CREATE INDEX idx_urls_depth ON urls(depth);
+                CREATE INDEX idx_urls_url ON urls(url);
+                """)
+        }
         return m
     }
 
