@@ -181,9 +181,11 @@ public actor CrawlEngine {
 
         // 405 and 501 are the two codes that actually mean "this server does not do
         // HEAD". Retrying on any other 4xx would double our traffic on ordinary 404s.
+        var usedGETFallback = false
         if case .response(let head) = outcome, head.status == 405 || head.status == 501 {
             outcome = await client.fetch(url: item.url.absoluteString, method: "GET",
                                          userAgent: config.userAgent, timeout: config.timeout)
+            usedGETFallback = true
         }
 
         switch outcome {
@@ -194,10 +196,16 @@ public actor CrawlEngine {
                 redirectTarget: nil, bodyGz: nil, xRobotsTag: nil, facts: nil
             )
         case .response(let response):
-            // A HEAD has no body, so size can only come from the header. When the
-            // header is absent the column stays null — never zero, which would
-            // masquerade as a real measurement of an empty file.
-            let length = response.header("content-length").flatMap { Int($0) } ?? response.body?.count
+            // A HEAD carries no content by definition, regardless of what bytes the
+            // transport happens to buffer — `URLSessionHTTPClient` hands back a
+            // present-but-empty `Data()`, not nil, so `body?.count` would silently
+            // read 0 there. Size can only come from the Content-Length header on a
+            // HEAD response; when it's absent the column stays null — never zero,
+            // which would masquerade as a real measurement of an empty file. The
+            // body-count fallback is only legitimate when the GET fallback actually
+            // downloaded a body.
+            let length = response.header("content-length").flatMap { Int($0) }
+                ?? (usedGETFallback ? response.body?.count : nil)
             let redirectTarget = response.isRedirect
                 ? response.location.flatMap { URLNormalizer.normalize($0, relativeTo: item.url) }
                 : nil

@@ -22,7 +22,10 @@ private struct CheckClient: HTTPClient {
         var headers: [String: String] = ["Content-Type": "image/png"]
         if let contentLength { headers["Content-Length"] = contentLength }
         if method == "HEAD" {
-            return .response(HTTPResponse(status: headStatus, headers: headers, body: nil, elapsedMs: 1))
+            // Matches URLSessionHTTPClient's real contract: `session.data(for:)` returns
+            // a non-optional Data, so a HEAD comes back with a present-but-empty body,
+            // never nil. A mock returning nil here would hide a body?.count ?? 0 bug.
+            return .response(HTTPResponse(status: headStatus, headers: headers, body: Data(), elapsedMs: 1))
         }
         // The GET fallback returns a real HTML body, so a test can prove it is
         // still never parsed for links.
@@ -92,6 +95,21 @@ private func runEngine(store: Store, client: CheckClient) async throws {
         try Int.fetchOne(db, sql: "SELECT content_length FROM responses")
     }
     #expect(size == nil, "an unknown size must never be reported as zero bytes")
+}
+
+@Test func aBodyDownloadedByTheGETFallbackHasItsRealSizeRecorded() async throws {
+    let log = MethodLog()
+    let store = try storeWithCheckOnlyURL()
+    // headStatus 405 forces the GET fallback, which genuinely downloads a body
+    // (and sends no Content-Length header), so this is the one case where
+    // falling back to body.count is legitimate rather than a phantom zero.
+    try await runEngine(store: store, client: CheckClient(log: log, headStatus: 405))
+    let body = "<html><head><title>T</title></head><body><a href=\"/onwards\">x</a></body></html>"
+    let size = try await store.dbQueue.read { db in
+        try Int.fetchOne(db, sql: "SELECT content_length FROM responses")
+    }
+    #expect(size == body.utf8.count,
+            "a body the GET fallback actually downloaded must record its real size")
 }
 
 @Test func a405TriggersExactlyOneGETRetry() async throws {
