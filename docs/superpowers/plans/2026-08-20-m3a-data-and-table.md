@@ -703,11 +703,11 @@ private func hasResponse(_ store: Store, url: String) async throws -> Bool {
     let store = try await crawl()
     let visible = try await store.dbQueue.read { db in
         try String.fetchAll(db, sql: """
-            SELECT u.url FROM urls u WHERE \\(Store.visibleURLsFilter) ORDER BY u.url
+            SELECT u.url FROM urls u WHERE \(Store.visibleURLsFilter) ORDER BY u.url
             """)
     }
     #expect(!visible.contains("https://seed.test/pic.png"),
-            "a pure image must stay out of the URL table even once fetched; got \\(visible)")
+            "a pure image must stay out of the URL table even once fetched; got \(visible)")
     #expect(visible.contains("https://seed.test/"))
     #expect(visible.contains("https://other.test/page"), "external links belong in the table")
 }
@@ -728,7 +728,7 @@ private func hasResponse(_ store: Store, url: String) async throws -> Bool {
         try db.execute(sql: "INSERT INTO responses (url_id, status, fetched_at) VALUES (1,200,0),(2,200,0)")
     }
     let visible = try await store.dbQueue.read { db in
-        try String.fetchAll(db, sql: "SELECT url FROM urls u WHERE \\(Store.visibleURLsFilter)")
+        try String.fetchAll(db, sql: "SELECT url FROM urls u WHERE \(Store.visibleURLsFilter)")
     }
     #expect(visible.contains("https://dual.test/thing"),
             "a real page that is also an image source must remain visible")
@@ -737,7 +737,7 @@ private func hasResponse(_ store: Store, url: String) async throws -> Bool {
 @Test func summaryAndTableStillAgree() async throws {
     let store = try await crawl()
     let filtered = try await store.dbQueue.read { db in
-        try Int.fetchOne(db, sql: "SELECT count(*) FROM urls u WHERE \\(Store.visibleURLsFilter)") ?? 0
+        try Int.fetchOne(db, sql: "SELECT count(*) FROM urls u WHERE \(Store.visibleURLsFilter)") ?? 0
     }
     let totalURLs = try store.summary().totalURLs
     #expect(filtered == totalURLs, "one filter, one meaning of 'total URLs'")
