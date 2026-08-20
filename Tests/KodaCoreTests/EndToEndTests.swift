@@ -171,7 +171,11 @@ private func redirectServerScript() throws -> URL {
     let summary = try store.summary()
 
     #expect(summary.byStatusClass["2xx"] == 3, "index, about, dupe")
-    #expect(summary.byStatusClass["4xx"] == 1, "missing.html")
+    // missing.html (a real dead link) plus pic.png and noalt.png: checkImages now fetches
+    // both <img> sources on index.html, and neither file exists on the fixture server, so
+    // both genuinely 404. blocked/secret.html is not among these three because robots.txt
+    // disallows it, so it's never fetched at all (see `robotsBlockedPathIsNotFetched`).
+    #expect(summary.byStatusClass["4xx"] == 3, "missing.html, pic.png, noalt.png")
     #expect(summary.duplicateTitles == 2, "'Shared Title' on about and dupe")
     #expect(summary.missingDescriptions == 1, "dupe.html")
     #expect(summary.missingH1 == 1, "dupe.html")

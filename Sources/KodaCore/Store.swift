@@ -4,25 +4,22 @@ import GRDB
 public final class Store: @unchecked Sendable {
     public let dbQueue: DatabaseQueue
 
-    /// A URL counts as "found" unless it exists *solely* as an image source: `<img src>`
-    /// targets get their own row in `urls` (see `Store+Write`'s `upsertURL(..., enqueue:
-    /// false)` for images), but they are resources, not pages — they must not inflate the
-    /// URL counts a report or the crawl table shows for the site. A URL is only excluded
-    /// when it was never actually fetched (no `responses` row) and is never a normal link
-    /// target (`links.to_url_id`); if either is true, it's a real page that happens to also
-    /// be embedded as an image somewhere, and must still be counted. `urls` is deduplicated
-    /// by `url_hash`, so such a URL collapses to a single row — excluding by identity alone
-    /// would drop it entirely.
+    /// Which URLs count as rows a user should see — every URL except one that
+    /// exists *only* as an image source.
     ///
-    /// Shared by `Store.summary()` and `KodaUI.RowStore` so the summary report and the crawl
-    /// table can never disagree about how many URLs a crawl found — the two had a single
-    /// hand-maintained-twice divergence in M1 that this constant exists to prevent from
-    /// recurring. References `u` as the alias for `urls` in the enclosing query.
+    /// This deliberately does NOT consider whether the URL has been fetched.
+    /// Before M3a, images were never fetched, so "has a response" was a safe
+    /// proxy for "is a real page". M3a fetches images, so that proxy would now
+    /// admit every `.png` into the URL table. A URL that is genuinely both a
+    /// page and an image source is kept by the links clause instead.
+    ///
+    /// `Store.summary()` and `RowIndex` share this one constant. Two
+    /// hand-maintained copies of this predicate is what produced M1's
+    /// `urlCounts().total` versus `summary().totalURLs` divergence.
     public static let visibleURLsFilter = """
         u.id NOT IN (
           SELECT src_url_id FROM images
-          WHERE src_url_id NOT IN (SELECT url_id FROM responses)
-            AND src_url_id NOT IN (SELECT to_url_id FROM links)
+          WHERE src_url_id NOT IN (SELECT to_url_id FROM links)
         )
         """
 

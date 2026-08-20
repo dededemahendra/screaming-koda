@@ -18,6 +18,15 @@ public struct CrawlConfig: Codable, Sendable {
     public var retainBodyURLLimit: Int = 50_000
     public var include: [String] = []
     public var exclude: [String] = []
+    /// Fetch external links with HEAD to record their status. On by default: a
+    /// broken-outbound-links report is one of the genuinely useful things this
+    /// tool does. Turn it off for a large site where the extra requests to third
+    /// parties are not worth it.
+    public var checkExternalLinks: Bool = true
+
+    /// Fetch image sources with HEAD to record status and byte size. Needed for
+    /// the "images over 100KB" report.
+    public var checkImages: Bool = true
 
     public init(seedURL: String) {
         self.seedURL = seedURL

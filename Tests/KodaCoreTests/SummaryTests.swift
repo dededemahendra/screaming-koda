@@ -37,7 +37,9 @@ private func summarizedCrawl() async throws -> CrawlSummary {
 @Test func groupsStatusCodes() async throws {
     let s = try await summarizedCrawl()
     #expect(s.byStatusClass["2xx"] == 3)
-    #expect(s.byStatusClass["4xx"] == 1)
+    // /c (404) plus /i.png: checkImages now fetches the image src on /a with a HEAD,
+    // and it 404s (not in the fixture's `pages` map), so it genuinely gains a status.
+    #expect(s.byStatusClass["4xx"] == 2)
 }
 
 @Test func countsMissingTitles() async throws {
@@ -63,7 +65,12 @@ private func summarizedCrawl() async throws -> CrawlSummary {
 
 @Test func reportsMaxDepth() async throws {
     let s = try await summarizedCrawl()
-    #expect(s.maxDepth == 1)
+    // /a's image (/i.png) is now actually fetched (checkImages) and sits at depth 2 (one
+    // level past /a's depth 1). Per the M3a design ("depth only affects reporting" for
+    // check-only URLs), maxDepth's query was never restricted to page_facts rows — it was
+    // simply that non-page URLs never had a `responses` row before this milestone, so they
+    // never contributed. Now that they do, the deepest *fetched* resource is genuinely 2.
+    #expect(s.maxDepth == 2)
 }
 
 // MARK: - Fix-round regression tests (review findings on the first cut of Task 11)

@@ -85,12 +85,17 @@ extension Store {
             guard let target = URLNormalizer.normalize(link.href, relativeTo: result.url) else { continue }
             let isInternal = Self.isInternal(target, seedHost: seedHost, config: config)
             let isNofollow = link.rel?.lowercased().contains("nofollow") == true
-            let crawlable = isInternal && (!isNofollow || config.followInternalNofollow)
+            let followInternal = isInternal && (!isNofollow || config.followInternalNofollow)
+            // External links are not crawled, but we do want their status — a
+            // broken outbound link is a real finding.
+            let statusCheckExternal = !isInternal && config.checkExternalLinks
+            let crawlable = followInternal || statusCheckExternal
 
             // nil means the URL was filtered out — skip just this link, never the transaction.
             guard let targetID = try Self.upsertURLOrSkip(db, target, parentDepth: result.depth, config: config,
                                                           seedHost: seedHost, now: now,
-                                                          enqueue: crawlable, discovered: &discovered)
+                                                          enqueue: crawlable, discovered: &discovered,
+                                                          checkOnly: statusCheckExternal)
             else { continue }
             try db.execute(
                 sql: "INSERT INTO links (from_url_id, to_url_id, anchor_text, rel, is_internal, position) VALUES (?,?,?,?,?,?)",
@@ -102,7 +107,9 @@ extension Store {
         for image in facts.images {
             guard let src = URLNormalizer.normalize(image.src, relativeTo: result.url) else { continue }
             let srcID = try Self.upsertURL(db, src, parentDepth: result.depth, config: config,
-                                           seedHost: seedHost, now: now, enqueue: false, discovered: &discovered)
+                                           seedHost: seedHost, now: now,
+                                           enqueue: config.checkImages, discovered: &discovered,
+                                           checkOnly: config.checkImages)
             try db.execute(sql: "INSERT INTO images (url_id, src_url_id, alt) VALUES (?,?,?)",
                            arguments: [result.urlID, srcID, image.alt])
         }
@@ -160,7 +167,8 @@ extension Store {
     static func upsertURL(
         _ db: Database, _ url: NormalizedURL, parentDepth: Int, config: CrawlConfig,
         seedHost: String?, now: Date, enqueue: Bool, discovered: inout Int,
-        redirectHops: Int = 0
+        redirectHops: Int = 0,
+        checkOnly: Bool = false
     ) throws -> Int64 {
         if let existing = try Int64.fetchOne(db, sql: "SELECT id FROM urls WHERE url_hash = ?", arguments: [url.sha256]) {
             return existing
@@ -182,11 +190,12 @@ extension Store {
 
         try db.execute(
             sql: """
-                INSERT INTO urls (url, url_hash, host, path, depth, is_internal, discovered_at, state, redirect_hops)
-                VALUES (?,?,?,?,?,?,?,?,?)
+                INSERT INTO urls (url, url_hash, host, path, depth, is_internal, discovered_at, state, redirect_hops, check_only)
+                VALUES (?,?,?,?,?,?,?,?,?,?)
                 """,
             arguments: [url.absoluteString, url.sha256, url.host, url.path, depth,
-                        internalFlag ? 1 : 0, now.timeIntervalSince1970, shouldQueue ? 0 : 3, redirectHops]
+                        internalFlag ? 1 : 0, now.timeIntervalSince1970, shouldQueue ? 0 : 3, redirectHops,
+                        checkOnly ? 1 : 0]
         )
         if shouldQueue { discovered += 1 }
         return db.lastInsertedRowID
@@ -215,10 +224,11 @@ extension Store {
     /// only that link. Excluded URLs are never recorded, so they stay out of reports.
     static func upsertURLOrSkip(
         _ db: Database, _ url: NormalizedURL, parentDepth: Int, config: CrawlConfig,
-        seedHost: String?, now: Date, enqueue: Bool, discovered: inout Int
+        seedHost: String?, now: Date, enqueue: Bool, discovered: inout Int,
+        checkOnly: Bool = false
     ) throws -> Int64? {
         if enqueue && !passesFilters(url, config: config) { return nil }
         return try upsertURL(db, url, parentDepth: parentDepth, config: config, seedHost: seedHost,
-                             now: now, enqueue: enqueue, discovered: &discovered)
+                             now: now, enqueue: enqueue, discovered: &discovered, checkOnly: checkOnly)
     }
 }

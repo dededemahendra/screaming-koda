@@ -89,7 +89,10 @@ private func runCrawl(config: CrawlConfig? = nil) async throws -> Store {
         let fetched = try Int.fetchOne(db, sql: """
             SELECT count(*) FROM responses r JOIN urls u ON u.id = r.url_id WHERE u.host = 'external.test'
             """)
-        #expect(fetched == 0, "external URLs are not fetched in M1")
+        // M3a: external links are fetched with a status-only HEAD (config.checkExternalLinks,
+        // on by default) so a broken outbound link can be reported. They are still never
+        // crawled onwards — see `aCheckOnlyResponseDiscoversNoLinks` for that guarantee.
+        #expect(fetched == 1, "external URLs get a status check as of M3a")
     }
 }
 
