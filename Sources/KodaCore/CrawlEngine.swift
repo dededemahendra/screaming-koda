@@ -170,12 +170,57 @@ public actor CrawlEngine {
         }
     }
 
+    /// A status check: HEAD the URL, record what came back, parse nothing.
+    /// Used for external links and image sources — we want their status and size,
+    /// not their content, and we never crawl onwards from them.
+    private static func statusCheck(
+        item: FrontierItem, config: CrawlConfig, client: HTTPClient
+    ) async -> CrawlResult {
+        var outcome = await client.fetch(url: item.url.absoluteString, method: "HEAD",
+                                         userAgent: config.userAgent, timeout: config.timeout)
+
+        // 405 and 501 are the two codes that actually mean "this server does not do
+        // HEAD". Retrying on any other 4xx would double our traffic on ordinary 404s.
+        if case .response(let head) = outcome, head.status == 405 || head.status == 501 {
+            outcome = await client.fetch(url: item.url.absoluteString, method: "GET",
+                                         userAgent: config.userAgent, timeout: config.timeout)
+        }
+
+        switch outcome {
+        case .failure(let kind):
+            return CrawlResult(
+                urlID: item.id, url: item.url, depth: item.depth, status: 0, errorKind: kind,
+                contentType: nil, contentLength: nil, responseTimeMs: 0,
+                redirectTarget: nil, bodyGz: nil, xRobotsTag: nil, facts: nil
+            )
+        case .response(let response):
+            // A HEAD has no body, so size can only come from the header. When the
+            // header is absent the column stays null — never zero, which would
+            // masquerade as a real measurement of an empty file.
+            let length = response.header("content-length").flatMap { Int($0) } ?? response.body?.count
+            let redirectTarget = response.isRedirect
+                ? response.location.flatMap { URLNormalizer.normalize($0, relativeTo: item.url) }
+                : nil
+            return CrawlResult(
+                urlID: item.id, url: item.url, depth: item.depth,
+                status: response.status, errorKind: nil,
+                contentType: response.contentType, contentLength: length,
+                responseTimeMs: response.elapsedMs,
+                redirectTarget: redirectTarget, bodyGz: nil, xRobotsTag: nil, facts: nil
+            )
+        }
+    }
+
     private static func process(
         item: FrontierItem, config: CrawlConfig, robots: RobotsRules,
         client: HTTPClient, parser: PageParser, retainBodies: Bool
     ) async -> CrawlResult? {
         if config.respectRobots, !robots.isAllowed(path: item.url.path, userAgent: config.userAgent) {
             return nil
+        }
+
+        if item.checkOnly {
+            return await statusCheck(item: item, config: config, client: client)
         }
 
         let outcome = await client.fetch(url: item.url.absoluteString, method: "GET",
