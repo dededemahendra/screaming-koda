@@ -1,5 +1,18 @@
 import Foundation
 
+enum ZIPArchiveError: Error, CustomStringConvertible {
+    case tooLarge(limitBytes: Int)
+
+    var description: String {
+        switch self {
+        case .tooLarge(let limit):
+            return "This crawl is too large for a single .xlsx (the format's 32-bit "
+                + "size limit is \(limit / 1_000_000_000)GB). Export to CSV, or export "
+                + "one report at a time."
+        }
+    }
+}
+
 /// A minimal store-only ZIP writer, existing solely so `.xlsx` export needs no
 /// third-party dependency.
 ///
@@ -12,6 +25,19 @@ import Foundation
 /// written once and opened once, and correctness here matters more than size.
 /// Deflate would add a second thing that can be subtly wrong.
 struct ZIPArchive {
+    /// ZIP32 stores every size and offset as a `UInt32`, so an archive cannot
+    /// exceed 4GB. A whole-crawl workbook at the 500,000-URL cap across eleven
+    /// reports can plausibly get within reach of that, and `UInt32(someInt)`
+    /// *traps* on overflow — so without this guard the failure mode is a crash
+    /// with no explanation rather than a message telling the user to export CSV.
+    ///
+    /// Injectable so a test can drive the limit without building 4GB of data.
+    let sizeLimit: Int
+
+    init(sizeLimit: Int = Int(UInt32.max)) {
+        self.sizeLimit = sizeLimit
+    }
+
     private struct Entry {
         let path: String
         let data: Data
@@ -28,7 +54,12 @@ struct ZIPArchive {
     private static let dosTime: UInt16 = 0
     private static let dosDate: UInt16 = 0x0021
 
-    mutating func add(path: String, data: Data) {
+    mutating func add(path: String, data: Data) throws {
+        // Checked before writing, and against the running total rather than just
+        // this entry, because the central directory offset must fit too.
+        guard payload.count + data.count + path.utf8.count + 30 <= sizeLimit else {
+            throw ZIPArchiveError.tooLarge(limitBytes: sizeLimit)
+        }
         let crc = CRC32.checksum(data)
         let offset = UInt32(payload.count)
         var header = Data()
@@ -51,8 +82,11 @@ struct ZIPArchive {
         entries.append(Entry(path: path, data: data, crc: crc, offset: offset))
     }
 
-    func finish() -> Data {
+    func finish() throws -> Data {
         var out = payload
+        guard out.count <= sizeLimit else {
+            throw ZIPArchiveError.tooLarge(limitBytes: sizeLimit)
+        }
         let directoryOffset = UInt32(out.count)
 
         for entry in entries {

@@ -7,19 +7,23 @@ import Foundation
 /// the right trade for an export nobody diffs and everybody opens once.
 public enum XLSXWriter {
 
-    public static func encode(_ exports: [ReportExport]) -> Data {
+    /// Throws `ZIPArchiveError.tooLarge` for a crawl that will not fit in the
+    /// format's 32-bit size limit, rather than trapping on the `UInt32`
+    /// conversion. `sizeLimit` is injectable so that path is testable.
+    public static func encode(_ exports: [ReportExport],
+                              sizeLimit: Int = Int(UInt32.max)) throws -> Data {
         let names = sheetNames(exports.map(\.name))
-        var zip = ZIPArchive()
+        var zip = ZIPArchive(sizeLimit: sizeLimit)
 
-        zip.add(path: "[Content_Types].xml", data: Data(contentTypes(count: exports.count).utf8))
-        zip.add(path: "_rels/.rels", data: Data(rootRels.utf8))
-        zip.add(path: "xl/workbook.xml", data: Data(workbook(names: names).utf8))
-        zip.add(path: "xl/_rels/workbook.xml.rels",
-                data: Data(workbookRels(count: exports.count).utf8))
+        try zip.add(path: "[Content_Types].xml", data: Data(contentTypes(count: exports.count).utf8))
+        try zip.add(path: "_rels/.rels", data: Data(rootRels.utf8))
+        try zip.add(path: "xl/workbook.xml", data: Data(workbook(names: names).utf8))
+        try zip.add(path: "xl/_rels/workbook.xml.rels",
+                    data: Data(workbookRels(count: exports.count).utf8))
         for (index, export) in exports.enumerated() {
-            zip.add(path: "xl/worksheets/sheet\(index + 1).xml", data: Data(sheet(export).utf8))
+            try zip.add(path: "xl/worksheets/sheet\(index + 1).xml", data: Data(sheet(export).utf8))
         }
-        return zip.finish()
+        return try zip.finish()
     }
 
     // MARK: - Sheet naming

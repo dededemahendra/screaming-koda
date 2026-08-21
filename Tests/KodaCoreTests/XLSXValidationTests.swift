@@ -56,7 +56,7 @@ private let sample = [
             ET.fromstring(z.read(n))
         print(len(names))
         """
-    #expect(try validate(XLSXWriter.encode(sample), script: script) == "6")
+    #expect(try validate(try XLSXWriter.encode(sample), script: script) == "6")
 }
 
 /// A sheet the workbook does not list is invisible; a listed sheet with no part
@@ -79,7 +79,7 @@ private let sample = [
             names.append(sheet.get('name'))
         print(','.join(names))
         """
-    #expect(try validate(XLSXWriter.encode(sample), script: script) == "Internal,Titles")
+    #expect(try validate(try XLSXWriter.encode(sample), script: script) == "Internal,Titles")
 }
 
 @MainActor
@@ -99,7 +99,7 @@ private let sample = [
         """
     // A1 header, C2 the escaped title, B3 the 404, and C3 absent because that
     // cell is a genuine NULL rather than an empty string.
-    #expect(try validate(XLSXWriter.encode(sample), script: script)
+    #expect(try validate(try XLSXWriter.encode(sample), script: script)
             == "Address|Home & \"quoted\" <tag>|404|False")
 }
 
@@ -107,7 +107,7 @@ private let sample = [
 @MainActor
 @Test func awholeCrawlExportsToAValidElevenSheetWorkbook() throws {
     let store = try ReportFixture.make()
-    let data = XLSXWriter.encode(try store.exportAll())
+    let data = try XLSXWriter.encode(try store.exportAll())
     let script = """
         import sys, zipfile, xml.etree.ElementTree as ET
         NS = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
