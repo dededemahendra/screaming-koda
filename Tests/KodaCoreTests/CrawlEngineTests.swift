@@ -31,6 +31,12 @@ private let site: [String: (Int, [String: String], String)] = [
     "https://site.test/new": (200, [:], html(title: "New", body: "<p>Moved here</p>")),
     "https://site.test/gone": (404, [:], ""),
     "https://site.test/dupe": (200, [:], html(title: "About", body: "<p>Duplicate title</p>")),
+    // Real, parseable content — a 200 with an anchor the parser genuinely could follow.
+    // Without this, a bodyless 404 fallback would fail `isHTML` and empty-body checks on
+    // its own, so "no links, no facts" would hold even if checkOnly threading were broken
+    // and this URL went down the ordinary full-crawl path. Giving it something to decline
+    // to parse is what makes `externalLinksGetAStatusCheckButAreNotCrawled` meaningful.
+    "https://external.test/x": (200, [:], html(title: "External", body: "<a href=\"/somewhere\">x</a>")),
 ]
 
 private func runCrawl(config: CrawlConfig? = nil) async throws -> Store {
