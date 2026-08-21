@@ -182,12 +182,26 @@ and exact-match-only duplicate detection.
 
 ## M4 Completion Criteria
 
-- [ ] `swift test` passes
-- [ ] A crawled page in Windows-1252 shows the correct title
-- [ ] The current report exports to CSV and the file opens in a spreadsheet
-- [ ] All reports export to one XLSX with eleven sheets, and Python can parse it
-- [ ] An exported file's rows equal the table's rows for the same view
-- [ ] Configuration survives relaunch
-- [ ] An invalid regex is refused before the crawl starts
-- [ ] `grep -rE 'import (AppKit|SwiftUI)' Sources/KodaCore` returns nothing
-- [ ] No build warnings outside the swift-testing deprecation
+- [x] `swift test` passes
+- [x] A crawled page in Windows-1252 shows the correct title
+- [x] The current report exports to CSV; the file is written and read back in a test
+- [x] All reports export to one XLSX with eleven sheets, and Python can parse it
+- [x] An exported file's rows equal the table's rows for the same view
+- [x] Configuration survives relaunch
+- [x] An invalid regex is refused before the crawl starts
+- [x] `grep -rE 'import (AppKit|SwiftUI)' Sources/KodaCore` returns nothing
+- [x] No build warnings outside the swift-testing deprecation
+
+Verified 2026-08-21 against `4757b24` plus the CLI export: `swift test` 388
+passed, `swift build` clean with no warnings outside the swift-testing
+deprecation, `grep -rE 'import (AppKit|SwiftUI)' Sources/KodaCore` empty.
+
+End-to-end, through the shipped `koda` binary rather than only through tests:
+a crawl of the fixture site over real HTTP, then `koda export` producing an
+eleven-sheet workbook that Python's `zipfile` and `xml.etree` both accept, with
+the Windows-1252 page's title surviving as `Café naïve` all the way into the
+CSV.
+
+**Not verified:** that Excel or Numbers opens the workbook. The format is
+checked against a real OOXML parser, not against Excel itself, and a sample
+file has been handed over for a human to double-click.

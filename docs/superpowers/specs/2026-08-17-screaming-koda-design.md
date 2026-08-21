@@ -1,7 +1,7 @@
 # Screaming Koda — Design
 
 **Date:** 2026-08-17
-**Status:** Approved for implementation planning
+**Status:** v1 delivered 2026-08-21 (M1–M4)
 **Scope:** v1 (milestones M1–M4)
 
 ## Purpose
@@ -296,19 +296,36 @@ Test-driven throughout. The layering is what makes it cheap:
 
 ## Milestones
 
-Each gets its own implementation plan when reached.
+All four are delivered as of 2026-08-21. Each has its own design spec and
+implementation plan under `docs/superpowers/`.
 
-**M1 — headless crawler.** `KodaCore` end to end: fetch, robots, frontier,
-parse, store. Verified by a CLI that crawls a site and prints a summary. No UI.
-This milestone makes or breaks the project.
+| Milestone | Status | Delivered |
+|---|---|---|
+| **M1 — headless crawler** | Done | `KodaCore` end to end: fetch, robots, frontier, parse, store, plus a CLI |
+| **M2 — app shell** | Done | Window, toolbar, paged `NSTableView`, live progress, pause/resume/stop, `.app` bundling |
+| **M3a — data and table** | Done | External and image status checks, per-host concurrency, sortable columns, Resume / Replace / Cancel |
+| **M3b — reports** | Done | The eleven tabs and their 52 filters, sidebar issue counts, detail inspector |
+| **M4 — finishing** | Done | CSV and Excel export, crawl configuration UI, character-encoding detection |
 
-**M2 — app shell.** Window, toolbar, paged table, live progress against a real
-crawl.
+M3 was split in two once M2 landed: M3a was the crawler work the reports needed
+(external link statuses, image sizes) and M3b was the reports themselves.
 
-**M3 — reports.** The full tab set, sidebar filters, detail inspector.
+### Known deviations from this spec
 
-**M4 — finishing.** CSV and Excel export, crawl configuration UI, resume,
-`.app` bundling script.
+Recorded rather than quietly fixed, because both are deliberate:
+
+**Write batching.** This spec promises a flush every 100 rows or 500ms. The
+implementation flushes once per claim batch, which is *more* often. Changing it
+is an optimisation and no measurement says it is needed, so it stands.
+
+**`DatabaseQueue`, not `DatabasePool`.** "WAL mode means readers never block the
+writer" is true of a pool and not of a queue, which is a single serialised
+connection. In practice writes are batched per claim batch, so a read waits at
+most one transaction. Recorded in the M2 design; the stall has never been
+observed.
+
+**Duplicate detection is exact-match**, per this spec's own v1 position. Two
+titles differing by a trailing space are not duplicates.
 
 ## Non-goals
 

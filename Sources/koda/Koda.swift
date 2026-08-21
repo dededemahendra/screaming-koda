@@ -8,7 +8,7 @@ struct Koda: AsyncParsableCommand {
         commandName: "koda",
         abstract: "Crawl a site and report on it.",
         version: KodaCoreInfo.versionString,
-        subcommands: [Crawl.self],
+        subcommands: [Crawl.self, Export.self],
         defaultSubcommand: Crawl.self
     )
 }
@@ -181,5 +181,73 @@ struct Crawl: AsyncParsableCommand {
         line("Missing meta descriptions", s.missingDescriptions)
         line("Missing H1", s.missingH1)
         line("Images missing alt", s.imagesMissingAlt)
+    }
+}
+
+
+struct Export: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Export a finished crawl to CSV or Excel.")
+
+    @Argument(help: "Path to a .koda database.")
+    var db: String
+
+    @Option(name: .long, help: "Output path. A file for xlsx, a directory for csv.")
+    var out: String?
+
+    @Option(name: .long, help: "csv or xlsx.")
+    var format: String = "xlsx"
+
+    @Option(name: .long, help: "Export one report by id. Omit for all eleven.")
+    var report: String?
+
+    mutating func run() async throws {
+        guard FileManager.default.fileExists(atPath: db) else {
+            throw ValidationError("No crawl database at \(db)")
+        }
+        guard ["csv", "xlsx"].contains(format) else {
+            throw ValidationError("Format must be csv or xlsx, not \(format)")
+        }
+
+        let store = try Store(path: db)
+        try store.migrate()
+
+        let reports: [Report]
+        if let report {
+            guard let match = Reports.all.first(where: { $0.id == report }) else {
+                throw ValidationError("Unknown report \(report). "
+                    + "Choose from: " + Reports.all.map(\.id).joined(separator: ", "))
+            }
+            reports = [match]
+        } else {
+            reports = Reports.all
+        }
+
+        let exports = try reports.map {
+            try store.export(report: $0, filter: $0.defaultFilter)
+        }
+        let base = (db as NSString).deletingPathExtension
+        let destination = out ?? (format == "xlsx" ? base + ".xlsx" : base + "-csv")
+
+        if format == "xlsx" {
+            try XLSXWriter.encode(exports).write(to: URL(fileURLWithPath: destination), options: .atomic)
+            Crawl.logLine("Wrote \(exports.count) sheet(s) to \(destination)")
+        } else if exports.count == 1 {
+            try CSVWriter.encode(exports[0]).write(to: URL(fileURLWithPath: destination), options: .atomic)
+            Crawl.logLine("Wrote \(destination)")
+        } else {
+            let directory = URL(fileURLWithPath: destination)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            for export in exports {
+                let name = export.name.lowercased().replacingOccurrences(of: " ", with: "-")
+                let url = directory.appendingPathComponent(name + ".csv")
+                try CSVWriter.encode(export).write(to: url, options: .atomic)
+            }
+            Crawl.logLine("Wrote \(exports.count) files to \(destination)")
+        }
+
+        for export in exports {
+            Crawl.logLine("  \(export.name): \(export.rows.count) rows")
+        }
     }
 }
