@@ -258,7 +258,10 @@ public actor CrawlEngine {
             let isHTML = response.contentType?.contains("html") == true
 
             if isHTML, let body = response.body, !body.isEmpty {
-                let html = String(decoding: body, as: UTF8.self)
+                // Not a bare UTF-8 decode: a Windows-1252 page decoded as UTF-8
+                // yields a mangled title, which the Titles report would then
+                // present as a real finding. See TextDecoding.
+                let html = TextDecoding.decode(body, contentType: response.contentType)
                 facts = try? parser.parse(html: html)
                 if retainBodies { bodyGz = Gzip.compress(body) }
             }
