@@ -63,6 +63,13 @@ public final class CrawlController {
     public private(set) var counts: [String: Int] = [:]
     /// The row the inspector is describing, or nil when nothing is selected.
     public private(set) var selectedRowID: Int64?
+    /// The inspector's four panes, loaded together when the selection changes.
+    /// Loading on selection rather than on every tick keeps four extra queries
+    /// off the crawl's refresh path.
+    public private(set) var detail: URLDetail?
+    public private(set) var inlinks: InspectorRows<LinkRow>?
+    public private(set) var outlinks: InspectorRows<LinkRow>?
+    public private(set) var images: InspectorRows<ImageRow>?
 
     public var selectedReport: Report {
         Reports.all.first { $0.id == selectedReportID } ?? Reports.internalURLs
@@ -224,7 +231,7 @@ public final class CrawlController {
 
         engine = prepared.engine
         store = prepared.store
-        selectedRowID = nil
+        selectRow(id: nil)
         let freshIndex = RowIndex(store: prepared.store, report: selectedReport)
         freshIndex.rebuild(report: selectedReport, filter: selectedFilter,
                            sortColumnID: nil, ascending: true)
@@ -311,15 +318,29 @@ public final class CrawlController {
             ?? report.defaultFilter
         selectedReportID = report.id
         selectedFilterID = filter.id
-        selectedRowID = nil
+        selectRow(id: nil)
         rowIndex?.rebuild(report: report, filter: filter, sortColumnID: nil, ascending: true)
         lastSortRebuild = Date()
         rows?.refresh()
         revision &+= 1
     }
 
+    /// Loads the inspector for a row. A failed read empties the panes rather
+    /// than leaving the previous URL's inlinks on screen under a new heading,
+    /// which would be actively misleading.
     public func selectRow(id: Int64?) {
         selectedRowID = id
+        guard let store, let id else {
+            detail = nil
+            inlinks = nil
+            outlinks = nil
+            images = nil
+            return
+        }
+        detail = try? store.detail(id: id)
+        inlinks = try? store.inlinks(id: id)
+        outlinks = try? store.outlinks(id: id)
+        images = try? store.imageRows(id: id)
     }
 
     /// Recomputes the sidebar counts, at most once per `countsRefreshInterval`

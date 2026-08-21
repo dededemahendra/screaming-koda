@@ -170,3 +170,41 @@ private func addPage(to store: Store, path: String) throws {
                        arguments: [db.lastInsertedRowID])
     }
 }
+
+@MainActor
+@Test func selectingARowLoadsAllFourInspectorPanes() async throws {
+    let c = await finishedCrawl()
+    let homeID = try #require(c.rows?.row(at: 0)?.id)
+    c.selectRow(id: homeID)
+
+    #expect(c.detail?.value("Address")?.hasPrefix("https://sel.test") == true)
+    #expect(c.outlinks?.items.contains { $0.url.hasSuffix("/untitled") } == true)
+    #expect(c.inlinks != nil)
+    #expect(c.images != nil)
+}
+
+@MainActor
+@Test func deselectingClearsTheInspectorRatherThanLeavingStaleRows() async throws {
+    let c = await finishedCrawl()
+    c.selectRow(id: try #require(c.rows?.row(at: 0)?.id))
+    #expect(c.detail != nil)
+
+    c.selectRow(id: nil)
+    #expect(c.detail == nil)
+    #expect(c.inlinks == nil)
+    #expect(c.outlinks == nil)
+    #expect(c.images == nil)
+}
+
+/// Switching tab clears the inspector too. Leaving the previous URL's inlinks
+/// on screen under a new tab's selection would be worse than showing nothing.
+@MainActor
+@Test func switchingReportsClearsTheInspector() async throws {
+    let c = await finishedCrawl()
+    c.selectRow(id: try #require(c.rows?.row(at: 0)?.id))
+    #expect(c.detail != nil)
+
+    c.select(reportID: "titles")
+    #expect(c.detail == nil)
+    #expect(c.outlinks == nil)
+}

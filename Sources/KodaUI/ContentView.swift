@@ -35,15 +35,31 @@ public struct ContentView: View {
                 noticeBanner(notice)
                 Divider()
             }
-            URLTableView(rows: controller.rows,
-                         report: controller.selectedReport,
-                         revision: controller.revision,
-                         onSortChange: { columnID, ascending in
-                             controller.applySort(columnID: columnID, ascending: ascending)
-                         },
-                         onSelect: { controller.selectRow(id: $0) })
+            HSplitView {
+                SidebarView(counts: controller.counts,
+                            selectedReportID: controller.selectedReportID,
+                            selectedFilterID: controller.selectedFilterID,
+                            onSelect: { report, filter in
+                                controller.select(reportID: report, filterID: filter)
+                            })
+                VSplitView {
+                    URLTableView(rows: controller.rows,
+                                 report: controller.selectedReport,
+                                 revision: controller.revision,
+                                 onSortChange: { columnID, ascending in
+                                     controller.applySort(columnID: columnID, ascending: ascending)
+                                 },
+                                 onSelect: { controller.selectRow(id: $0) })
+                        .frame(minHeight: 220)
+                    InspectorView(detail: controller.detail,
+                                  inlinks: controller.inlinks,
+                                  outlinks: controller.outlinks,
+                                  images: controller.images)
+                }
+                .frame(minWidth: 640)
+            }
         }
-        .frame(minWidth: 900, minHeight: 500)
+        .frame(minWidth: 1100, minHeight: 660)
         .sheet(item: Binding(
             get: { controller.pendingExistingCrawl },
             set: { if $0 == nil { controller.cancelPending() } }
@@ -107,12 +123,19 @@ public struct ContentView: View {
             let label = controller.state == .paused ? "Paused" : "Crawling"
             return Text("\(label) — \(p?.crawled ?? 0) crawled, \(p?.queued ?? 0) queued")
         case .finished:
-            return Text("Finished — \(controller.rows?.count ?? 0) URLs")
+            return Text("Finished — \(shownCount) in \(controller.selectedReport.name)")
         case .cancelled:
-            return Text("Stopped — \(controller.rows?.count ?? 0) URLs")
+            return Text("Stopped — \(shownCount) in \(controller.selectedReport.name)")
         case .failed(let reason):
             return Text("Failed — \(reason)")
         }
+    }
+
+    /// What the table is currently showing, which is no longer the same thing as
+    /// how many URLs the crawl found.
+    private var shownCount: String {
+        let n = controller.rows?.count ?? 0
+        return "\(n) row\(n == 1 ? "" : "s")"
     }
 
     private func noticeBanner(_ notice: String) -> some View {
