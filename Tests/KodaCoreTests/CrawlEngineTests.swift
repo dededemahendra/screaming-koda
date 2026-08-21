@@ -81,18 +81,28 @@ private func runCrawl(config: CrawlConfig? = nil) async throws -> Store {
     #expect(status == 404)
 }
 
-@Test func externalLinksAreRecordedButNotCrawled() async throws {
+@Test func externalLinksGetAStatusCheckButAreNotCrawled() async throws {
     let store = try await runCrawl()
     try await store.dbQueue.read { db in
         let external = try Int.fetchOne(db, sql: "SELECT count(*) FROM urls WHERE host = 'external.test'")
         #expect(external == 1)
+        // M3a: external links are fetched with a status-only HEAD (config.checkExternalLinks,
+        // on by default) so a broken outbound link can be reported.
         let fetched = try Int.fetchOne(db, sql: """
             SELECT count(*) FROM responses r JOIN urls u ON u.id = r.url_id WHERE u.host = 'external.test'
             """)
-        // M3a: external links are fetched with a status-only HEAD (config.checkExternalLinks,
-        // on by default) so a broken outbound link can be reported. They are still never
-        // crawled onwards — see `aCheckOnlyResponseDiscoversNoLinks` for that guarantee.
         #expect(fetched == 1, "external URLs get a status check as of M3a")
+
+        // ...but that status check must never turn into a crawl of the other site: no
+        // outgoing links discovered from it, and no page facts extracted for it.
+        let outgoingLinks = try Int.fetchOne(db, sql: """
+            SELECT count(*) FROM links l JOIN urls u ON u.id = l.from_url_id WHERE u.host = 'external.test'
+            """)
+        #expect(outgoingLinks == 0, "a status check must never crawl onwards from the external URL")
+        let facts = try Int.fetchOne(db, sql: """
+            SELECT count(*) FROM page_facts f JOIN urls u ON u.id = f.url_id WHERE u.host = 'external.test'
+            """)
+        #expect(facts == 0, "a status check must never extract page facts for the external URL")
     }
 }
 
