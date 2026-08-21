@@ -38,7 +38,10 @@ private func seededStore(pages: Int) throws -> Store {
 
 @MainActor
 @Test func countMatchesTheNumberOfRows() throws {
-    let rows = RowStore(store: try seededStore(pages: 37))
+    let store = try seededStore(pages: 37)
+    let index = RowIndex(store: store)
+    index.rebuild(sort: .discoveryOrder, ascending: true)
+    let rows = RowStore(store: store, index: index)
     rows.refresh()
     #expect(rows.count == 37)
 }
@@ -46,7 +49,9 @@ private func seededStore(pages: Int) throws -> Store {
 @MainActor
 @Test func countAgreesWithSummaryTotalURLs() throws {
     let store = try seededStore(pages: 25)
-    let rows = RowStore(store: store)
+    let index = RowIndex(store: store)
+    index.rebuild(sort: .discoveryOrder, ascending: true)
+    let rows = RowStore(store: store, index: index)
     rows.refresh()
     let totalURLs = try store.summary().totalURLs
     #expect(rows.count == totalURLs,
@@ -55,7 +60,10 @@ private func seededStore(pages: Int) throws -> Store {
 
 @MainActor
 @Test func returnsTheCorrectRowAtEachIndex() throws {
-    let rows = RowStore(store: try seededStore(pages: 10))
+    let store = try seededStore(pages: 10)
+    let index = RowIndex(store: store)
+    index.rebuild(sort: .discoveryOrder, ascending: true)
+    let rows = RowStore(store: store, index: index)
     rows.refresh()
     #expect(rows.row(at: 0)?.title == "T0")
     #expect(rows.row(at: 4)?.title == "T4")
@@ -68,7 +76,10 @@ private func seededStore(pages: Int) throws -> Store {
 @MainActor
 @Test func crossesPageBoundariesCorrectly() throws {
     // pageSize 5 means indices 4/5 and 9/10 straddle page edges.
-    let rows = RowStore(store: try seededStore(pages: 23), pageSize: 5, maxPages: 10)
+    let store = try seededStore(pages: 23)
+    let index = RowIndex(store: store)
+    index.rebuild(sort: .discoveryOrder, ascending: true)
+    let rows = RowStore(store: store, index: index, pageSize: 5, maxPages: 10)
     rows.refresh()
     for i in 0..<23 {
         #expect(rows.row(at: i)?.title == "T\(i)", "wrong row at index \(i)")
@@ -78,7 +89,10 @@ private func seededStore(pages: Int) throws -> Store {
 @MainActor
 @Test func survivesCacheEviction() throws {
     // 40 rows over 4-row pages with only 2 pages resident forces eviction.
-    let rows = RowStore(store: try seededStore(pages: 40), pageSize: 4, maxPages: 2)
+    let store = try seededStore(pages: 40)
+    let index = RowIndex(store: store)
+    index.rebuild(sort: .discoveryOrder, ascending: true)
+    let rows = RowStore(store: store, index: index, pageSize: 4, maxPages: 2)
     rows.refresh()
     for i in stride(from: 0, to: 40, by: 1) {
         #expect(rows.row(at: i)?.title == "T\(i)")
@@ -90,7 +104,10 @@ private func seededStore(pages: Int) throws -> Store {
 
 @MainActor
 @Test func outOfRangeIndexesReturnNil() throws {
-    let rows = RowStore(store: try seededStore(pages: 3))
+    let store = try seededStore(pages: 3)
+    let index = RowIndex(store: store)
+    index.rebuild(sort: .discoveryOrder, ascending: true)
+    let rows = RowStore(store: store, index: index)
     rows.refresh()
     #expect(rows.row(at: 3) == nil)
     #expect(rows.row(at: 999) == nil)
@@ -100,7 +117,9 @@ private func seededStore(pages: Int) throws -> Store {
 @MainActor
 @Test func refreshPicksUpRowsAddedAfterwards() throws {
     let store = try seededStore(pages: 5)
-    let rows = RowStore(store: store)
+    let index = RowIndex(store: store)
+    index.rebuild(sort: .discoveryOrder, ascending: true)
+    let rows = RowStore(store: store, index: index)
     rows.refresh()
     #expect(rows.count == 5)
 
@@ -136,7 +155,9 @@ private func seededStore(pages: Int) throws -> Store {
         let id = db.lastInsertedRowID
         try db.execute(sql: "INSERT INTO links (from_url_id, to_url_id, anchor_text, rel, is_internal, position) VALUES (1,?,'q',NULL,1,0)", arguments: [id])
     }
-    let rows = RowStore(store: store)
+    let index = RowIndex(store: store)
+    index.rebuild(sort: .discoveryOrder, ascending: true)
+    let rows = RowStore(store: store, index: index)
     rows.refresh()
     #expect(rows.row(at: 2)?.status == nil, "a queued-but-unfetched URL has no status yet")
 }
@@ -150,7 +171,10 @@ private func seededStore(pages: Int) throws -> Store {
     // -- the page just read ten times -- because a hit never moves it in the queue.
     // `loadCount` (an internal test seam, not part of the public API) lets the test
     // tell a cache hit from a reload without reaching into private state.
-    let rows = RowStore(store: try seededStore(pages: 12), pageSize: 4, maxPages: 2)
+    let store = try seededStore(pages: 12)
+    let index = RowIndex(store: store)
+    index.rebuild(sort: .discoveryOrder, ascending: true)
+    let rows = RowStore(store: store, index: index, pageSize: 4, maxPages: 2)
     rows.refresh()
 
     _ = rows.row(at: 0) // loads page 0
@@ -174,4 +198,58 @@ private func seededStore(pages: Int) throws -> Store {
     #expect(rows.row(at: 4)?.title == "T4", "page 1 was cold; it must have been evicted")
     #expect(rows.loadCount == countBeforeRereadingPage1 + 1,
             "re-reading the untouched page must require a reload")
+}
+
+@MainActor
+@Test func rowsComeBackInTheIndexsOrderNotTheDatabasesOrder() throws {
+    let store = try seededStore(pages: 10)
+    let index = RowIndex(store: store)
+    index.rebuild(sort: .address, ascending: false)   // reverse alphabetical
+    let rows = RowStore(store: store, index: index)
+    rows.refresh()
+
+    let addresses = (0..<rows.count).compactMap { rows.row(at: $0)?.address }
+    #expect(addresses == addresses.sorted(by: >),
+            "SQL `IN` does not preserve order; RowStore must reorder to match the index")
+}
+
+@MainActor
+@Test func countComesFromTheIndex() throws {
+    let store = try seededStore(pages: 7)
+    let index = RowIndex(store: store)
+    index.rebuild(sort: .discoveryOrder, ascending: true)
+    let rows = RowStore(store: store, index: index)
+    rows.refresh()
+    #expect(rows.count == 7)
+    #expect(rows.count == index.count)
+}
+
+@MainActor
+@Test func aRowDeepInALargeCrawlIsFetchedDirectly() throws {
+    // The point of the index: row 4,999 costs the same as row 0.
+    let store = try seededStore(pages: 5_000)
+    let index = RowIndex(store: store)
+    index.rebuild(sort: .discoveryOrder, ascending: true)
+    let rows = RowStore(store: store, index: index)
+    rows.refresh()
+
+    #expect(rows.row(at: 4_999)?.title == "T4999")
+    #expect(rows.row(at: 0)?.title == "T0")
+}
+
+@MainActor
+@Test func changingTheSortChangesWhatRowZeroIs() throws {
+    let store = try seededStore(pages: 5)
+    let index = RowIndex(store: store)
+    let rows = RowStore(store: store, index: index)
+
+    index.rebuild(sort: .address, ascending: true)
+    rows.refresh()
+    let ascendingFirst = rows.row(at: 0)?.address
+
+    index.rebuild(sort: .address, ascending: false)
+    rows.refresh()
+    let descendingFirst = rows.row(at: 0)?.address
+
+    #expect(ascendingFirst != descendingFirst)
 }

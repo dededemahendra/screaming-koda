@@ -25,6 +25,10 @@ public final class CrawlController {
     @ObservationIgnored private let dbPath: String?
     @ObservationIgnored private let dbPathForHost: (@MainActor @Sendable (String) throws -> (path: String, replacedExisting: Bool))?
     @ObservationIgnored private var engine: CrawlEngine?
+    /// Backs `rows`. `RowStore` only fetches by id now (Task 6) — this is what
+    /// actually notices new rows a live crawl has added; `rows?.refresh()`
+    /// alone no longer does, since it only drops the page cache.
+    @ObservationIgnored private var rowIndex: RowIndex?
     @ObservationIgnored private var runTask: Task<Void, Never>?
     @ObservationIgnored private var tickTask: Task<Void, Never>?
     /// Tracks whether the robots-unreachable notice was already shown this run,
@@ -101,7 +105,10 @@ public final class CrawlController {
         }
 
         engine = prepared.engine
-        rows = RowStore(store: prepared.store)
+        let freshIndex = RowIndex(store: prepared.store)
+        freshIndex.rebuild(sort: .discoveryOrder, ascending: true)
+        rowIndex = freshIndex
+        rows = RowStore(store: prepared.store, index: freshIndex)
         state = .running
 
         let engine = prepared.engine
@@ -124,6 +131,7 @@ public final class CrawlController {
             let finalState = await engine.state
             await MainActor.run {
                 self.state = finalState
+                self.rowIndex?.appendNewIds()
                 self.rows?.refresh()
                 self.revision &+= 1
                 self.explainEmptyCrawlIfNeeded(store: store)
@@ -179,6 +187,7 @@ public final class CrawlController {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 guard let self, self.state.isActive else { return }
+                self.rowIndex?.appendNewIds()
                 self.rows?.refresh()
                 self.revision &+= 1
             }

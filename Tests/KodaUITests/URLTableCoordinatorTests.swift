@@ -26,7 +26,9 @@ private func seededRows(pages: Int) throws -> RowStore {
                            arguments: [id, "Title \(i)"])
         }
     }
-    let rows = RowStore(store: store)
+    let index = RowIndex(store: store)
+    index.rebuild(sort: .discoveryOrder, ascending: true)
+    let rows = RowStore(store: store, index: index)
     rows.refresh()
     return rows
 }
@@ -66,7 +68,9 @@ private func seededRows(pages: Int) throws -> RowStore {
             arguments: ["https://t.test/queued", Data("hq".utf8), "t.test", "/queued"]
         )
     }
-    let rows = RowStore(store: store)
+    let index = RowIndex(store: store)
+    index.rebuild(sort: .discoveryOrder, ascending: true)
+    let rows = RowStore(store: store, index: index)
     rows.refresh()
     let coordinator = URLTableCoordinator(rows: rows)
 
@@ -211,7 +215,9 @@ private func staleCell() -> NSTableCellView {
             arguments: ["https://t.test/queued", Data("hq".utf8), "t.test", "/queued"]
         )
     }
-    let rows = RowStore(store: store)
+    let index = RowIndex(store: store)
+    index.rebuild(sort: .discoveryOrder, ascending: true)
+    let rows = RowStore(store: store, index: index)
     rows.refresh()
     let coordinator = URLTableCoordinator(rows: rows)
     let cell = staleCell()
