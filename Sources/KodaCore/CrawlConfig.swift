@@ -3,7 +3,13 @@ import Foundation
 public struct CrawlConfig: Codable, Sendable {
     public var seedURL: String
     public var workers: Int = 5
-    public var maxPerHost: Int = 5
+    /// Deliberately below `workers`: batch size is `max(workers, 1)` and
+    /// `Store.claimNext` filters to `rn <= maxPerHost` before applying that
+    /// limit, so when the two are equal a single dominant host absorbs every
+    /// worker in every batch — identical to having no cap at all. 2 keeps the
+    /// cap real for the motivating case (a page with hundreds of links to one
+    /// domain) while `workers` stays at 5.
+    public var maxPerHost: Int = 2
     public var userAgent: String = KodaCoreInfo.userAgent
     public var timeout: TimeInterval = 20
     public var maxRedirects: Int = 10

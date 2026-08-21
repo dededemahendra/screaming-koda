@@ -203,6 +203,70 @@ private func runCrawl(config: CrawlConfig? = nil) async throws -> Store {
     #expect(aboutFetched == 0)
 }
 
+/// A fixture whose seed robots.txt disallows `/search`. Exercises three kinds of
+/// URL relative to the seed's own robots ruleset: an external link at a matching
+/// path, an internal page at a matching path, and an internal image under a
+/// matching path — the ruleset was fetched only for the seed host, and must gate
+/// only URLs on that host.
+private let crossHostRobotsSite: [String: (Int, [String: String], String)] = [
+    "https://cross.test/": (200, [:], html(title: "Home", body: """
+        <a href="/search">Internal Search</a>
+        <a href="https://other.test/search?q=x">External Search</a>
+        <img src="/search/photo.jpg" alt="photo">
+        """)),
+    "https://cross.test/search": (200, [:], html(title: "Search", body: "<p>results</p>")),
+    "https://other.test/search?q=x": (200, [:], html(title: "External Search", body: "<p>results</p>")),
+    "https://cross.test/search/photo.jpg": (200, ["Content-Type": "image/jpeg"], ""),
+]
+
+private func runCrossHostRobotsCrawl() async throws -> Store {
+    let store = try Store(path: nil)
+    try store.migrate()
+    var config = CrawlConfig(seedURL: "https://cross.test/")
+    config.workers = 1
+    try store.initializeCrawl(config: config, startedAt: Date())
+    _ = try store.insertURLIfNew(URLNormalizer.normalize(config.seedURL, relativeTo: nil)!,
+                                 depth: 0, isInternal: true, discoveredAt: Date())
+    let robots = RobotsRules.parse("User-agent: *\nDisallow: /search")
+    let engine = CrawlEngine(store: store, client: FixtureClient(pages: crossHostRobotsSite),
+                             parser: SwiftSoupParser(), config: config, robots: robots)
+    try await engine.run(onProgress: nil)
+    return store
+}
+
+@Test func seedRobotsDoesNotGateExternalHosts() async throws {
+    let store = try await runCrossHostRobotsCrawl()
+    let fetched = try await store.dbQueue.read { db in
+        try Int.fetchOne(db, sql: """
+            SELECT count(*) FROM responses r JOIN urls u ON u.id = r.url_id
+            WHERE u.host = 'other.test' AND u.path = '/search'
+            """) ?? 0
+    }
+    #expect(fetched == 1, "the seed's robots.txt must not gate a URL fetched on a different host")
+}
+
+@Test func seedRobotsStillGatesItsOwnInternalPages() async throws {
+    let store = try await runCrossHostRobotsCrawl()
+    let fetched = try await store.dbQueue.read { db in
+        try Int.fetchOne(db, sql: """
+            SELECT count(*) FROM responses r JOIN urls u ON u.id = r.url_id
+            WHERE u.host = 'cross.test' AND u.path = '/search'
+            """) ?? 0
+    }
+    #expect(fetched == 0, "the seed's own robots.txt must still gate its own host's pages")
+}
+
+@Test func seedRobotsStillGatesItsOwnInternalImages() async throws {
+    let store = try await runCrossHostRobotsCrawl()
+    let fetched = try await store.dbQueue.read { db in
+        try Int.fetchOne(db, sql: """
+            SELECT count(*) FROM responses r JOIN urls u ON u.id = r.url_id
+            WHERE u.host = 'cross.test' AND u.path = '/search/photo.jpg'
+            """) ?? 0
+    }
+    #expect(fetched == 0, "the seed's robots rules must still gate an internal image under a disallowed path")
+}
+
 @Test func reportsProgress() async throws {
     let store = try Store(path: nil)
     try store.migrate()

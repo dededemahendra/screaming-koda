@@ -127,13 +127,23 @@ ORDER BY depth, id
 LIMIT :limit
 ```
 
-`CrawlConfig.maxPerHost` (already present, defaulting to 5, unused since M1)
-becomes the parameter. Window functions require SQLite 3.25+, which macOS 14
-comfortably exceeds.
+`CrawlConfig.maxPerHost` (already present, unused since M1) becomes the
+parameter. Window functions require SQLite 3.25+, which macOS 14 comfortably
+exceeds.
 
 This bounds concurrent requests per host *within a batch*. Because batches are
 processed to completion before the next is claimed, it bounds them across the
 crawl too.
+
+**The default changed from 5 to 2 during M3a's fix wave.** Batch size is
+`max(workers, 1)` and `claimNext` filters to `rn <= maxPerHost` *before*
+applying that limit as the final `LIMIT`. With `workers` also defaulting to 5,
+a `maxPerHost` of 5 meant a single dominant host could still absorb every
+worker in every batch — the cap only ever binds when hosts compete for a
+batch, or when `maxPerHost < workers`. The milestone's own motivating scenario
+("a page with 200 links to one domain") is exactly the single-dominant-host
+case, so the original default made the cap a no-op for it. 2 keeps `workers`
+at 5 for overall throughput while making the per-host cap real.
 
 ### The visibility filter must change, or images flood the table
 
@@ -288,3 +298,47 @@ resizable or reorderable columns.
 Still open from M1, and not addressed here: the write-batching cadence (the
 spec promises 100 rows or 500ms; the implementation flushes per fetch batch),
 and character-encoding detection (bodies are always decoded as UTF-8).
+
+## Known limitations
+
+**A URL discovered first as an image source can keep `check_only` status
+permanently, even after a real link to it is discovered.**
+
+`Store.upsertURL` dedups by `url_hash`: if the URL already has a row, it
+returns that row's id immediately and writes nothing else. So a URL's
+`check_only` flag and queue state are fixed by whichever discovery reaches it
+*first* — every later discovery of the same URL is a no-op as far as
+`check_only` and enqueuing are concerned.
+
+Within one page's `writeFacts` call this is never a problem: links are
+processed before images, so a URL that is both an `<a href>` and an `<img
+src>` *on the same page* has its link discovery win, and the row is a normal,
+fully-crawled page (see `internalURLsKeepsPagesThatAreAlsoImageSources` in
+`SummaryTests.swift`). The gap is across pages: if some other page's `<img
+src>` reaches a URL *before* any page links to it normally, the row is
+created with `check_only = 1`. When a normal internal `<a href>` to that same
+URL is discovered later — on a different page, crawled afterward —
+`upsertURL`'s dedup check finds the existing row and returns immediately; the
+row is never flipped to `check_only = 0` and never enqueued for a full crawl.
+
+**Symptom:** the affected row gets a real status code, from the original HEAD
+issued for the image check, so it looks like an ordinary, finished row in the
+table. But its title, headings, meta description, and outbound links are
+never extracted, and the crawl never follows any links from it — it is
+silently incomplete rather than visibly blank. Before M3a this was harmless,
+because check-only URLs were never crawled at all and a blank row was
+obviously blank; M3a's check-only rows carry a real status, which is what
+makes the collision look deceptively finished.
+
+**Why this was not fixed in M3a:** the behavior predates this milestone —
+`upsertURL`'s dedup-and-return-early shape has always fixed a URL's state at
+first discovery; M3a only made the consequence visible by giving check-only
+rows a status. Triggering it needs the same absolute URL to appear first as
+an `<img src>` and only later as a normal link target — rare in practice,
+since image assets almost always carry a distinct extension (`.jpg`, `.png`,
+...) that a real page URL would not share. The correct fix touches
+`upsertURL`, a shared dedup path that every call site in `Store+Write.swift`
+(links, images, hreflang, redirect targets, canonical targets) relies on for
+its "already discovered" semantics, so a safe fix is more than a local
+change. The final M3a review judged this real but not worth the risk this
+late in the milestone, and left it for a future pass.

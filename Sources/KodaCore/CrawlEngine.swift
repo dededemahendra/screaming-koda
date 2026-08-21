@@ -223,7 +223,13 @@ public actor CrawlEngine {
         item: FrontierItem, config: CrawlConfig, robots: RobotsRules,
         client: HTTPClient, parser: PageParser, retainBodies: Bool
     ) async -> CrawlResult? {
-        if config.respectRobots, !robots.isAllowed(path: item.url.path, userAgent: config.userAgent) {
+        // `robots` is the ruleset fetched once for the SEED host (CrawlSession never
+        // fetches robots.txt for other hosts — one HEAD per unique URL is the agreed
+        // politeness bar for third parties). It must therefore only gate URLs on the
+        // seed host; applying it to a cross-host URL would silently drop links whenever
+        // the seed's own robots.txt happens to disallow a matching path.
+        let isOurHost = Store.isInternal(item.url, seedHost: config.seedHost, config: config)
+        if config.respectRobots, isOurHost, !robots.isAllowed(path: item.url.path, userAgent: config.userAgent) {
             return nil
         }
 

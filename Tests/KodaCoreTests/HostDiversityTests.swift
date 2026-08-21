@@ -34,6 +34,21 @@ private func storeWith(hosts: [(host: String, count: Int)]) throws -> Store {
 }
 
 @MainActor
+@Test func defaultMaxPerHostActuallyThrottlesADominantHost() throws {
+    // The motivating scenario: a page with hundreds of links to one domain. With the
+    // app's own worker count (5) and the config default for maxPerHost, a batch must
+    // come back smaller than the worker count — otherwise the cap is bidding zero
+    // against a single crowded host and every worker piles onto it every batch,
+    // identical to having no cap at all.
+    var config = CrawlConfig(seedURL: "https://crowded.test/")
+    config.workers = 5
+    let store = try storeWith(hosts: [("crowded.test", 200)])
+    let batch = try store.claimNext(limit: max(config.workers, 1), maxPerHost: config.maxPerHost)
+    #expect(batch.count < config.workers,
+            "maxPerHost (\(config.maxPerHost)) must throttle below workers (\(config.workers)) for a single dominant host")
+}
+
+@MainActor
 @Test func batchesSpreadAcrossHosts() throws {
     let store = try storeWith(hosts: [("a.test", 20), ("b.test", 20), ("c.test", 20)])
     let batch = try store.claimNext(limit: 9, maxPerHost: 3)

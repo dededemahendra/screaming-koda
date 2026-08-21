@@ -200,7 +200,7 @@ are recorded and abandoned, not followed.
 | Setting | Default |
 |---|---|
 | Concurrent workers | 5 |
-| Max concurrent per host | 5 |
+| Max concurrent per host | 2 |
 | Respect robots.txt | Yes |
 | Respect crawl-delay | Yes |
 | User agent | `ScreamingKoda/0.1` |
