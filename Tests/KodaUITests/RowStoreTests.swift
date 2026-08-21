@@ -136,8 +136,14 @@ private func seededStore(pages: Int) throws -> Store {
         try db.execute(sql: "INSERT INTO page_facts (url_id, title) VALUES (?,?)", arguments: [id, "T99"])
     }
 
+    // Membership now lives in RowIndex, not RowStore: RowStore.refresh() only
+    // drops cached pages, it cannot see a row the index has never heard of.
+    // A live crawl exercises both steps -- refresh the index, then the store
+    // -- so the test does the same rather than asserting a guarantee
+    // RowStore no longer owns alone.
+    index.appendNewIds()
     rows.refresh()
-    #expect(rows.count == 6, "a live crawl adds rows; refresh must see them")
+    #expect(rows.count == 6, "a live crawl adds rows; the index picks them up and the store shows them")
     #expect(rows.row(at: 5)?.title == "T99")
 }
 
