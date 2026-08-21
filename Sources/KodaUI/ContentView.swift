@@ -42,6 +42,30 @@ public struct ContentView: View {
                          })
         }
         .frame(minWidth: 900, minHeight: 500)
+        .sheet(item: Binding(
+            get: { controller.pendingExistingCrawl },
+            set: { if $0 == nil { controller.cancelPending() } }
+        )) { existing in
+            VStack(alignment: .leading, spacing: 14) {
+                Text("A crawl of \(existing.host) already exists")
+                    .font(.headline)
+                Text("\(existing.urlCount) URLs, last updated \(existing.modifiedAt.formatted(date: .abbreviated, time: .shortened)).")
+                    .foregroundStyle(.secondary)
+                Text("Resuming continues where it stopped. A finished crawl simply opens for browsing. Replacing deletes it permanently.")
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button("Cancel") { controller.cancelPending() }
+                        .keyboardShortcut(.cancelAction)
+                    Spacer()
+                    Button("Replace") { Task { await controller.replacePending() } }
+                    Button("Resume") { Task { await controller.resumePending() } }
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(20)
+            .frame(width: 460)
+        }
     }
 
     private var toolbar: some View {

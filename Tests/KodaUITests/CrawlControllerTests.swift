@@ -110,19 +110,17 @@ private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) async
 
 /// Item 1 of the M2 final review: the shipped app must write a real file, not an
 /// in-memory database, and `CrawlController` is where that resolution has to happen
-/// (the host isn't known until the user has typed a seed URL). `dbPathForHost` is the
-/// injection point the app composes through; these tests exercise it exactly the way
-/// `KodaApp.resolveDBPath` does, but pointed at a scratch directory instead of the
-/// user's real Application Support folder.
+/// (the host isn't known until the user has typed a seed URL). `crawlsDirectory` is
+/// the injection point the app composes through (see `KodaApp.init`); this test
+/// exercises it exactly the same way, but pointed at a scratch directory instead of
+/// the user's real Application Support folder.
 @MainActor
-@Test func aControllerWithDBPathForHostWritesARealFileOnDisk() async {
+@Test func aControllerWithCrawlsDirectoryWritesARealFileOnDisk() async {
     let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: tempRoot) }
 
-    let c = CrawlController(client: ThreePageClient(), parser: SwiftSoupParser(), dbPathForHost: { host in
-        let result = try CrawlDatabaseLocation.prepare(forHost: host, appSupport: tempRoot)
-        return (result.path, result.outcome == .replacedExisting)
-    })
+    let c = CrawlController(client: ThreePageClient(), parser: SwiftSoupParser(),
+                             crawlsDirectory: { CrawlDatabaseLocation.crawlsDirectory(appSupport: tempRoot) })
     c.seedURL = "https://three.test/"
     await c.start()
     #expect(await waitUntil { c.state == .finished })
@@ -133,33 +131,109 @@ private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) async
     #expect(FileManager.default.fileExists(atPath: expected.path),
             "a real .koda file must exist on disk once the crawl finishes")
     #expect(c.notice == nil, "the first crawl of a host must not claim anything was replaced")
+    #expect(c.pendingExistingCrawl == nil, "there was nothing to ask about the first time around")
+}
+
+/// Task 8: re-crawling a host that already has a database no longer auto-replaces
+/// it. `start()` instead publishes `pendingExistingCrawl` and waits — the tests
+/// below exercise each of the three answers the sheet in `ContentView` offers
+/// (Replace, Resume, Cancel), driven directly through the controller's API.
+@MainActor
+private func directoryProvider(_ tempRoot: URL) -> @MainActor @Sendable () -> URL {
+    { CrawlDatabaseLocation.crawlsDirectory(appSupport: tempRoot) }
 }
 
 @MainActor
-@Test func reCrawlingTheSameHostReplacesTheOldDatabaseAndSaysSo() async {
+@Test func reCrawlingTheSameHostOffersAPendingChoiceInsteadOfReplacingImmediately() async {
     let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: tempRoot) }
-    let resolver: @MainActor @Sendable (String) throws -> (path: String, replacedExisting: Bool) = { host in
-        let result = try CrawlDatabaseLocation.prepare(forHost: host, appSupport: tempRoot)
-        return (result.path, result.outcome == .replacedExisting)
-    }
+    let directory = directoryProvider(tempRoot)
 
-    let first = CrawlController(client: ThreePageClient(), parser: SwiftSoupParser(), dbPathForHost: resolver)
+    let first = CrawlController(client: ThreePageClient(), parser: SwiftSoupParser(), crawlsDirectory: directory)
     first.seedURL = "https://three.test/"
     await first.start()
     #expect(await waitUntil { first.state == .finished })
 
     // A brand new controller, standing in for the user quitting and relaunching the
     // app, then crawling the same host again.
-    let second = CrawlController(client: ThreePageClient(), parser: SwiftSoupParser(), dbPathForHost: resolver)
+    let second = CrawlController(client: ThreePageClient(), parser: SwiftSoupParser(), crawlsDirectory: directory)
     second.seedURL = "https://three.test/"
     await second.start()
-    #expect(await waitUntil { second.state == .finished })
 
-    let notice = second.notice ?? ""
-    #expect(notice.lowercased().contains("replaced"),
-            "re-crawling the same host must say the old database was replaced; got: \(notice)")
+    #expect(second.state == .idle, "nothing runs until the user answers")
+    #expect(second.pendingExistingCrawl?.host == "three.test")
+    #expect((second.pendingExistingCrawl?.urlCount ?? 0) >= 3, "the prior crawl's own pages must be counted")
+}
+
+@MainActor
+@Test func replacingAPendingCrawlDeletesTheOldDatabaseAndStartsFresh() async {
+    let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: tempRoot) }
+    let directory = directoryProvider(tempRoot)
+
+    let first = CrawlController(client: ThreePageClient(), parser: SwiftSoupParser(), crawlsDirectory: directory)
+    first.seedURL = "https://three.test/"
+    await first.start()
+    #expect(await waitUntil { first.state == .finished })
+
+    let second = CrawlController(client: ThreePageClient(), parser: SwiftSoupParser(), crawlsDirectory: directory)
+    second.seedURL = "https://three.test/"
+    await second.start()
+    #expect(second.pendingExistingCrawl != nil)
+
+    await second.replacePending()
+    #expect(await waitUntil { second.state == .finished })
+    #expect(second.pendingExistingCrawl == nil)
     #expect((second.rows?.count ?? 0) >= 3, "the new crawl's own rows must still show up")
+}
+
+@MainActor
+@Test func resumingAPendingCrawlContinuesTheExistingDatabaseRatherThanReplacingIt() async {
+    let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: tempRoot) }
+    let directory = directoryProvider(tempRoot)
+
+    let first = CrawlController(client: ThreePageClient(), parser: SwiftSoupParser(), crawlsDirectory: directory)
+    first.seedURL = "https://three.test/"
+    await first.start()
+    #expect(await waitUntil { first.state == .finished })
+
+    let second = CrawlController(client: ThreePageClient(), parser: SwiftSoupParser(), crawlsDirectory: directory)
+    second.seedURL = "https://three.test/"
+    await second.start()
+    #expect(second.pendingExistingCrawl != nil)
+
+    await second.resumePending()
+    #expect(await waitUntil { second.state == .finished })
+    #expect(second.pendingExistingCrawl == nil)
+    #expect((second.rows?.count ?? 0) >= 3, "resuming a finished crawl opens and displays its existing rows")
+    #expect(second.notice == nil, "resuming must not claim anything was replaced")
+}
+
+@MainActor
+@Test func cancellingAPendingCrawlLeavesTheExistingDatabaseUntouched() async {
+    let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: tempRoot) }
+    let directory = directoryProvider(tempRoot)
+
+    let first = CrawlController(client: ThreePageClient(), parser: SwiftSoupParser(), crawlsDirectory: directory)
+    first.seedURL = "https://three.test/"
+    await first.start()
+    #expect(await waitUntil { first.state == .finished })
+
+    let second = CrawlController(client: ThreePageClient(), parser: SwiftSoupParser(), crawlsDirectory: directory)
+    second.seedURL = "https://three.test/"
+    await second.start()
+    guard let pending = second.pendingExistingCrawl else {
+        Issue.record("expected a pending existing crawl")
+        return
+    }
+
+    second.cancelPending()
+    #expect(second.pendingExistingCrawl == nil)
+    #expect(second.state == .idle)
+    #expect(FileManager.default.fileExists(atPath: pending.path.path),
+            "Cancel must leave the existing database exactly as it was")
 }
 
 @MainActor

@@ -46,10 +46,17 @@ public final class CrawlController {
     /// Bumped on every tick so the table knows to reload.
     public private(set) var revision = 0
 
+    /// Set when Start found an existing crawl for this host and is waiting for
+    /// the user to choose. The window presents a sheet; nothing happens until
+    /// they answer.
+    public private(set) var pendingExistingCrawl: ExistingCrawl?
+
     @ObservationIgnored private let client: HTTPClient
     @ObservationIgnored private let parser: PageParser
     @ObservationIgnored private let dbPath: String?
-    @ObservationIgnored private let dbPathForHost: (@MainActor @Sendable (String) throws -> (path: String, replacedExisting: Bool))?
+    /// Where crawl databases live. When nil the controller stays in-memory,
+    /// which is what every existing test relies on.
+    @ObservationIgnored private let crawlsDirectory: (@MainActor @Sendable () -> URL)?
     @ObservationIgnored private var engine: CrawlEngine?
     /// Backs `rows`. `RowStore` only fetches by id now (Task 6) — this is what
     /// actually notices new rows a live crawl has added; `rows?.refresh()`
@@ -73,54 +80,99 @@ public final class CrawlController {
     ///   - dbPath: A fixed database path, or nil for an in-memory database.
     ///     This is the default and is what every existing test relies on —
     ///     it must keep meaning "in-memory" unqualified.
-    ///   - dbPathForHost: When set, overrides `dbPath` at `start()` time by
-    ///     computing a real path from the seed's host. This is how the
-    ///     shipped app (composed in `KodaApp`) makes crawls durable without
-    ///     changing what a bare `CrawlController()` does for tests — the
-    ///     resolution has to happen here, at `start()`, because the host
-    ///     isn't known until the user has typed a seed URL, which is after
-    ///     construction.
+    ///   - crawlsDirectory: When set, `start()` derives a real on-disk path from
+    ///     the seed's host and checks it for an existing crawl before doing
+    ///     anything else. This is how the shipped app (composed in `KodaApp`)
+    ///     makes crawls durable without changing what a bare `CrawlController()`
+    ///     does for tests — the resolution has to happen here, at `start()`,
+    ///     because the host isn't known until the user has typed a seed URL,
+    ///     which is after construction.
     public init(
         client: HTTPClient = URLSessionHTTPClient(),
         parser: PageParser = SwiftSoupParser(),
         dbPath: String? = nil,
-        dbPathForHost: (@MainActor @Sendable (String) throws -> (path: String, replacedExisting: Bool))? = nil
+        crawlsDirectory: (@MainActor @Sendable () -> URL)? = nil
     ) {
         self.client = client
         self.parser = parser
         self.dbPath = dbPath
-        self.dbPathForHost = dbPathForHost
+        self.crawlsDirectory = crawlsDirectory
     }
 
     public func start() async {
-        guard !state.isActive else { return }
+        guard !state.isActive, pendingExistingCrawl == nil else { return }
         notice = nil
         progress = nil
+
+        guard let host = CrawlConfig(seedURL: seedURL).seedHost else {
+            notice = "Cannot start: \(seedURL) is not a crawlable http(s) URL."
+            state = .idle
+            return
+        }
+
+        guard let crawlsDirectory else {
+            // No directory provider: fall back to the fixed dbPath (nil means
+            // in-memory), exactly as every controller test that doesn't inject
+            // a directory relies on — this includes tests that pass a concrete
+            // on-disk `dbPath`, not just the in-memory ones.
+            await beginCrawl(dbPath: dbPath)
+            return
+        }
+        let directory = crawlsDirectory()
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        } catch {
+            notice = "Cannot start: \(error)"
+            state = .idle
+            return
+        }
+        if let existing = CrawlDatabaseLocation.existing(forHost: host, in: directory) {
+            pendingExistingCrawl = existing
+            return
+        }
+        await beginCrawl(dbPath: CrawlDatabaseLocation.path(forHost: host, in: directory).path)
+    }
+
+    /// Continue the existing crawl. An interrupted one picks up its frontier; a
+    /// finished one has an empty frontier, so this simply opens and displays it.
+    public func resumePending() async {
+        guard let pending = pendingExistingCrawl else { return }
+        pendingExistingCrawl = nil
+        await beginCrawl(dbPath: pending.path.path)
+    }
+
+    /// Discard the existing crawl and start fresh.
+    public func replacePending() async {
+        guard let pending = pendingExistingCrawl else { return }
+        pendingExistingCrawl = nil
+        do {
+            try CrawlDatabaseLocation.replace(at: pending.path)
+        } catch {
+            notice = "Could not replace the existing crawl: \(error)"
+            state = .idle
+            return
+        }
+        await beginCrawl(dbPath: pending.path.path)
+    }
+
+    public func cancelPending() {
+        pendingExistingCrawl = nil
+        state = .idle
+    }
+
+    /// Prepares the session, creates the index and row store, launches the run
+    /// task, and starts the tick. Shared by all three routes into a crawl:
+    /// a fresh start, Resume, and Replace.
+    private func beginCrawl(dbPath: String?) async {
         robotsUnreachableNoticeShown = false
 
         var config = CrawlConfig(seedURL: seedURL)
         config.workers = 5
 
-        var resolvedDBPath = dbPath
-        if let dbPathForHost, let host = config.seedHost {
-            do {
-                let resolved = try dbPathForHost(host)
-                resolvedDBPath = resolved.path
-                if resolved.replacedExisting {
-                    notice = appendNotice(notice, "A previous crawl database for \(host) already "
-                        + "existed and was replaced — resuming an existing crawl isn't supported yet.")
-                }
-            } catch {
-                notice = "Cannot start: \(error)"
-                state = .idle
-                return
-            }
-        }
-
         let prepared: (engine: CrawlEngine, store: Store, robotsOutcome: RobotsFetchOutcome)
         do {
             prepared = try await CrawlSession.prepare(
-                dbPath: resolvedDBPath, config: config, client: client, parser: parser
+                dbPath: dbPath, config: config, client: client, parser: parser
             )
         } catch {
             notice = "Cannot start: \(error)"

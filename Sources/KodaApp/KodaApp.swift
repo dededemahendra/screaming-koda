@@ -8,7 +8,9 @@ struct KodaApp: App {
     @State private var controller: CrawlController
 
     init() {
-        let controller = CrawlController(dbPathForHost: Self.resolveDBPath(forHost:))
+        let controller = CrawlController(
+            crawlsDirectory: { CrawlDatabaseLocation.crawlsDirectory() }
+        )
         _controller = State(initialValue: controller)
         // Wired up here, in `init`, rather than in an `.onAppear` inside `body`: this
         // must be set before any window-close can reach `AppDelegate`, and `body` isn't
@@ -27,15 +29,6 @@ struct KodaApp: App {
             ContentView(controller: controller)
         }
         .defaultSize(width: 1100, height: 650)
-    }
-
-    /// Computes where the app should store a crawl of `host`, mirroring the
-    /// CLI's `<host>.koda` naming convention but rooted at the app's fixed
-    /// Application Support directory instead of the CLI's current directory
-    /// (see `CrawlDatabaseLocation`'s doc comment for why).
-    static func resolveDBPath(forHost host: String) throws -> (path: String, replacedExisting: Bool) {
-        let result = try CrawlDatabaseLocation.prepare(forHost: host)
-        return (result.path, result.outcome == .replacedExisting)
     }
 }
 
