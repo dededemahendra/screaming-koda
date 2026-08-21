@@ -14,6 +14,13 @@ let package = Package(
         .package(url: "https://github.com/scinfu/SwiftSoup.git", from: "2.13.7"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.3.0"),
         // Required: XCTest and Testing are absent from the Command Line Tools SDK.
+        //
+        // Every @Test emits "'Test' is deprecated: Swift Testing is now included in the
+        // Swift 6 toolchain. Remove your 'swift-testing' package dependency". Under Xcode
+        // that is true. Under Command Line Tools alone — which is what this project builds
+        // with — it is not: removing this dependency fails with "missing required module
+        // '_TestingInternals'". Verified 2026-08-21. The warnings are the cost of building
+        // without Xcode; do not act on them.
         .package(url: "https://github.com/swiftlang/swift-testing.git", from: "0.10.0"),
     ],
     targets: [
