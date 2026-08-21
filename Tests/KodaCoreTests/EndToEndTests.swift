@@ -262,3 +262,103 @@ private func redirectServerScript() throws -> URL {
     }
     #expect(targetStatus == 200, "the target was fetched separately, not collapsed into the redirect's own response")
 }
+
+// MARK: - The reports, against a real crawl
+//
+// `ReportFixture` is written by hand, so it could flatter the report SQL by
+// containing exactly the shapes the SQL expects. These run the same eleven
+// reports over a crawl the crawler actually produced from real HTTP responses.
+
+@Test func everyReportRunsAgainstARealCrawl() async throws {
+    let server = try FixtureServer(directory: try fixtureDirectory())
+    defer { server.stop() }
+    try await server.waitUntilReady()
+
+    var config = CrawlConfig(seedURL: "http://127.0.0.1:\(server.port)/index.html")
+    config.workers = 3
+    let (store, _) = try await CrawlSession.start(
+        dbPath: nil, config: config,
+        client: URLSessionHTTPClient(), parser: SwiftSoupParser(), onProgress: nil)
+
+    let counts = try store.counts(for: Reports.all)
+    for report in Reports.all {
+        for filter in report.filters {
+            let ids = try store.ids(for: report, filter: filter, sortBy: nil, ascending: true)
+            #expect(counts["\(report.id).\(filter.id)"] == ids.count,
+                    "\(report.id).\(filter.id): sidebar count disagrees with the rows")
+            // Every column must survive a real row, including the derived ones.
+            _ = try store.rows(ids: Array(ids.prefix(20)), columns: report.columns)
+            // And every sortable column must survive being ordered by.
+            for column in report.columns where column.sortable {
+                _ = try store.ids(for: report, filter: filter, sortBy: column, ascending: false)
+            }
+        }
+    }
+}
+
+/// The findings a person would actually expect from this fixture site, arrived
+/// at by reading the HTML rather than by running the code and writing down
+/// whatever it said.
+@Test func theReportsFindWhatTheFixtureSiteActuallyContains() async throws {
+    let server = try FixtureServer(directory: try fixtureDirectory())
+    defer { server.stop() }
+    try await server.waitUntilReady()
+
+    var config = CrawlConfig(seedURL: "http://127.0.0.1:\(server.port)/index.html")
+    config.workers = 3
+    let (store, _) = try await CrawlSession.start(
+        dbPath: nil, config: config,
+        client: URLSessionHTTPClient(), parser: SwiftSoupParser(), onProgress: nil)
+    let counts = try store.counts(for: Reports.all)
+
+    #expect(counts["titles.all"] == 3, "index, about, dupe are the HTML 200s")
+    #expect(counts["titles.duplicate"] == 2, "'Shared Title' on about and dupe")
+    #expect(counts["titles.missing"] == 0)
+    #expect(counts["metaDescription.missing"] == 1, "dupe.html has no description")
+    #expect(counts["headings.missingH1"] == 1, "dupe.html has no h1")
+    #expect(counts["images.all"] == 2, "pic.png and noalt.png")
+    #expect(counts["images.missingAlt"] == 1, "noalt.png")
+    #expect(counts["responseCodes.clientError"] == 3, "missing.html, pic.png, noalt.png")
+    #expect(counts["responseCodes.serverError"] == 0)
+    #expect(counts["external.all"] == 0, "the fixture site links nowhere off-host")
+
+    // The reports and the M1 summary must not disagree about the same crawl.
+    let summary = try store.summary()
+    #expect(counts["titles.duplicate"] == summary.duplicateTitles)
+    #expect(counts["metaDescription.missing"] == summary.missingDescriptions)
+    #expect(counts["headings.missingH1"] == summary.missingH1)
+    #expect(counts["images.missingAlt"] == summary.imagesMissingAlt)
+    #expect(counts["internal.all"] == summary.totalURLs,
+            "the Internal tab and the crawl summary must count the same rows")
+}
+
+/// The inspector against real crawl data, not hand-written rows.
+@Test func theInspectorDescribesARealCrawledPage() async throws {
+    let server = try FixtureServer(directory: try fixtureDirectory())
+    defer { server.stop() }
+    try await server.waitUntilReady()
+
+    var config = CrawlConfig(seedURL: "http://127.0.0.1:\(server.port)/index.html")
+    config.workers = 3
+    let (store, _) = try await CrawlSession.start(
+        dbPath: nil, config: config,
+        client: URLSessionHTTPClient(), parser: SwiftSoupParser(), onProgress: nil)
+
+    let homeID = try await store.dbQueue.read { db in
+        try Int64.fetchOne(db, sql: "SELECT id FROM urls WHERE path = '/index.html'")!
+    }
+    let detail = try #require(try store.detail(id: homeID))
+    #expect(detail.value("Title") == "Fixture Home")
+    #expect(detail.value("H1") == "Home")
+    #expect(detail.value("Status") == "200")
+    #expect(detail.value("Indexability") == Indexability.indexable)
+
+    let outlinks = try store.outlinks(id: homeID)
+    #expect(outlinks.total == 4, "about, dupe, missing, blocked")
+    #expect(outlinks.items.contains { $0.url.hasSuffix("/missing.html") && $0.status == 404 },
+            "a broken outbound link is what this pane exists to show")
+
+    let images = try store.imageRows(id: homeID)
+    #expect(images.total == 2)
+    #expect(images.items.contains { $0.url.hasSuffix("noalt.png") && $0.alt == nil })
+}
