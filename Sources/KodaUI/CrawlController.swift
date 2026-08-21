@@ -44,6 +44,13 @@ public final class CrawlController {
     static let countsRefreshInterval: TimeInterval = 2
 
     public var seedURL: String = ""
+    /// The crawl configuration the settings sheet edits. Persisted only when the
+    /// controller was given a `CrawlSettings`; a bare controller keeps it in
+    /// memory, which is what keeps tests from reading or writing real
+    /// preferences.
+    public var config: CrawlConfig {
+        didSet { settings?.config = config }
+    }
 
     public private(set) var state: CrawlState = .idle
     public private(set) var progress: CrawlProgress?
@@ -91,6 +98,7 @@ public final class CrawlController {
     /// Where crawl databases live. When nil the controller stays in-memory,
     /// which is what every existing test relies on.
     @ObservationIgnored private let crawlsDirectory: (@MainActor @Sendable () -> URL)?
+    @ObservationIgnored private let settings: CrawlSettings?
     @ObservationIgnored private var engine: CrawlEngine?
     /// Kept so the sidebar counts and the inspector can query after the crawl
     /// task has finished with it. Internal rather than private so tests can
@@ -133,12 +141,15 @@ public final class CrawlController {
         client: HTTPClient = URLSessionHTTPClient(),
         parser: PageParser = SwiftSoupParser(),
         dbPath: String? = nil,
-        crawlsDirectory: (@MainActor @Sendable () -> URL)? = nil
+        crawlsDirectory: (@MainActor @Sendable () -> URL)? = nil,
+        settings: CrawlSettings? = nil
     ) {
         self.client = client
         self.parser = parser
         self.dbPath = dbPath
         self.crawlsDirectory = crawlsDirectory
+        self.settings = settings
+        self.config = settings?.config ?? CrawlSettings.clamped(CrawlConfig(seedURL: ""))
     }
 
     public func start() async {
@@ -148,6 +159,17 @@ public final class CrawlController {
 
         guard let host = CrawlConfig(seedURL: seedURL).seedHost else {
             notice = "Cannot start: \(seedURL) is not a crawlable http(s) URL."
+            state = .idle
+            return
+        }
+
+        // Checked here rather than inside the crawl, because `Store.passesFilters`
+        // cannot tell an invalid pattern from one that did not match: an invalid
+        // include pattern would crawl the seed and stop, looking like a broken
+        // tool rather than a bad setting.
+        let problems = CrawlSettings.problems(in: config)
+        guard problems.isEmpty else {
+            notice = "Cannot start:\n" + problems.map { "• " + $0 }.joined(separator: "\n")
             state = .idle
             return
         }
@@ -208,8 +230,8 @@ public final class CrawlController {
     private func beginCrawl(dbPath: String?) async {
         robotsUnreachableNoticeShown = false
 
-        var config = CrawlConfig(seedURL: seedURL)
-        config.workers = 5
+        var config = CrawlSettings.clamped(self.config)
+        config.seedURL = seedURL
 
         let prepared: (engine: CrawlEngine, store: Store, robotsOutcome: RobotsFetchOutcome)
         do {
@@ -328,6 +350,29 @@ public final class CrawlController {
     /// Loads the inspector for a row. A failed read empties the panes rather
     /// than leaving the previous URL's inlinks on screen under a new heading,
     /// which would be actively misleading.
+    /// Builds the export for the view currently on screen — the same report,
+    /// filter, and sort the user is looking at. Exporting something other than
+    /// what they can see is a support burden.
+    public func exportCurrentView() throws -> ReportExport? {
+        guard let store, let index = rowIndex else { return nil }
+        return try store.export(report: index.report, filter: index.filter,
+                                sortBy: index.sortColumn, ascending: index.ascending)
+    }
+
+    public func exportEverything() throws -> [ReportExport] {
+        guard let store else { return [] }
+        return try store.exportAll()
+    }
+
+    /// Whether there is anything to export yet.
+    public var canExport: Bool { store != nil }
+
+    public var crawlHost: String? { CrawlConfig(seedURL: seedURL).seedHost }
+
+    public func report(_ message: String) {
+        notice = message
+    }
+
     public func selectRow(id: Int64?) {
         selectedRowID = id
         guard let store, let id else {

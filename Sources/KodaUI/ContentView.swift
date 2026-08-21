@@ -1,3 +1,4 @@
+import AppKit
 import KodaCore
 import SwiftUI
 
@@ -20,6 +21,7 @@ public enum ToolbarAction: Hashable, Sendable {
 
 public struct ContentView: View {
     @State private var controller: CrawlController
+    @State private var showingSettings = false
 
     public init(controller: CrawlController = CrawlController()) {
         _controller = State(initialValue: controller)
@@ -60,6 +62,11 @@ public struct ContentView: View {
             }
         }
         .frame(minWidth: 1100, minHeight: 660)
+        .sheet(isPresented: $showingSettings) {
+            ConfigSheet(config: controller.config,
+                        onApply: { controller.config = $0; showingSettings = false },
+                        onCancel: { showingSettings = false })
+        }
         .sheet(item: Binding(
             get: { controller.pendingExistingCrawl },
             set: { if $0 == nil { controller.cancelPending() } }
@@ -110,6 +117,30 @@ public struct ContentView: View {
 
             Spacer()
             statusText.foregroundStyle(.secondary).monospacedDigit()
+
+            Button {
+                showingSettings = true
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+            }
+            .help("Crawl settings")
+            // Changing the configuration mid-crawl would apply to nothing that
+            // is already running and silently to whatever is not, so it waits.
+            .disabled(controller.state.isActive)
+
+            Menu {
+                Button("Current view as CSV…") { export(scope: .currentView, format: .csv) }
+                Button("Current view as Excel…") { export(scope: .currentView, format: .xlsx) }
+                Divider()
+                Button("All reports as Excel…") { export(scope: .everything, format: .xlsx) }
+                Button("All reports as CSV…") { export(scope: .everything, format: .csv) }
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+            }
+            .menuIndicator(.hidden)
+            .frame(width: 44)
+            .help("Export")
+            .disabled(!controller.canExport)
         }
         .padding(10)
     }
@@ -128,6 +159,42 @@ public struct ContentView: View {
             return Text("Stopped — \(shownCount) in \(controller.selectedReport.name)")
         case .failed(let reason):
             return Text("Failed — \(reason)")
+        }
+    }
+
+    /// Runs the export off the main actor, since a whole-crawl export at half a
+    /// million URLs is real work, and reports any failure through the same
+    /// notice banner everything else uses.
+    private func export(scope: ExportScope, format: ExportFormat) {
+        let host = controller.crawlHost
+        let reportName = scope == .currentView ? controller.selectedReport.name : nil
+        let suggested = ExportCommands.suggestedFilename(host: host, reportName: reportName,
+                                                         format: format, date: Date())
+        let wantsDirectory = (scope == .everything && format == .csv)
+
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = wantsDirectory
+            ? suggested.replacingOccurrences(of: ".csv", with: "")
+            : suggested
+        panel.canCreateDirectories = true
+        panel.prompt = "Export"
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+
+        do {
+            let exports: [ReportExport] = try scope == .currentView
+                ? [controller.exportCurrentView()].compactMap { $0 }
+                : controller.exportEverything()
+            guard !exports.isEmpty else {
+                controller.report("Nothing to export yet.")
+                return
+            }
+            let written = try ExportCommands.write(exports, format: format, to: destination,
+                                                   host: host, date: Date())
+            controller.report(written.count == 1
+                ? "Exported to \(written[0].path)."
+                : "Exported \(written.count) files to \(destination.path).")
+        } catch {
+            controller.report("Export failed: \(error.localizedDescription)")
         }
     }
 
