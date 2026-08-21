@@ -8,6 +8,32 @@ import Observation
 @MainActor
 @Observable
 public final class CrawlController {
+    /// How often a live crawl re-sorts for a column the user explicitly chose by
+    /// clicking a header. They are watching that sort, so it gets refreshed
+    /// often — but not on every 2 Hz tick, since a 500,000-row re-sort that
+    /// often would spend the machine's time on ordering rather than crawling.
+    static let sortRebuildInterval: TimeInterval = 2
+    /// How often the default (discovery-order) sort gets a full rebuild
+    /// alongside its cheap per-tick append.
+    ///
+    /// This exists to close a real gap: `RowIndex.appendNewIds()` only ever
+    /// fetches ids above the largest one it already holds. A URL that was
+    /// hidden by `Store.visibleURLsFilter` when first discovered — an
+    /// image-only URL — and later becomes visible because a real link to it
+    /// appears has an id *below* that watermark, so a pure append can never
+    /// find it; it would be silently missing from the crawl for good. A
+    /// periodic full rebuild recovers it.
+    ///
+    /// This can be less frequent than `sortRebuildInterval`: nobody picked
+    /// this sort on purpose, the append already handles the overwhelming
+    /// common case on every tick, and a late-revealed URL going unlisted for
+    /// a few extra seconds during an active crawl is unnoticeable. 5s is
+    /// short enough that it reads as "showed up a moment later" rather than
+    /// "missing", while being well below the tick rate (10 ticks between
+    /// rebuilds) so a large crawl still spends nearly all of its live-refresh
+    /// time on the cheap append, not a full re-sort.
+    static let liveFullRebuildInterval: TimeInterval = 5
+
     public var seedURL: String = ""
 
     public private(set) var state: CrawlState = .idle
@@ -31,6 +57,11 @@ public final class CrawlController {
     @ObservationIgnored private var rowIndex: RowIndex?
     @ObservationIgnored private var runTask: Task<Void, Never>?
     @ObservationIgnored private var tickTask: Task<Void, Never>?
+    /// Last rebuild for an explicitly-chosen sort; throttled by `sortRebuildInterval`.
+    @ObservationIgnored private var lastSortRebuild = Date.distantPast
+    /// Last periodic full rebuild under the default sort; throttled by
+    /// `liveFullRebuildInterval`.
+    @ObservationIgnored private var lastFullRebuild = Date.distantPast
     /// Tracks whether the robots-unreachable notice was already shown this run,
     /// independent of whatever else `notice` may also contain (such as a
     /// "database replaced" message set earlier in `start()`) — the emptiness
@@ -158,6 +189,17 @@ public final class CrawlController {
         await engine.cancel()
     }
 
+    /// Rebuilds the index under a newly chosen sort and reloads. Called from a
+    /// column header click; the coordinator resolves which column and
+    /// direction, this is where it's actually applied.
+    public func applySort(_ column: SortColumn, ascending: Bool) {
+        guard let index = rowIndex else { return }
+        index.rebuild(sort: column, ascending: ascending)
+        lastSortRebuild = Date()
+        rows?.refresh()
+        revision &+= 1
+    }
+
     /// A crawl that fetched nothing because robots.txt disallowed it looks
     /// identical to a broken tool. Say which it was — unless the
     /// robots-unreachable notice already explained the emptiness, which would
@@ -181,15 +223,34 @@ public final class CrawlController {
         return existing + "\n\n" + addition
     }
 
+    /// One tick's worth of live-crawl index bookkeeping, plus the reload it
+    /// implies. Internal (not private) so tests can drive it directly with an
+    /// injected `now`, without waiting on the real 500ms tick or the rebuild
+    /// throttles below it.
+    ///
+    /// Discovery order only ever appends, so a live crawl does not need to
+    /// re-sort for that. Any other sort rebuilds, throttled to
+    /// `sortRebuildInterval`.
+    func refreshRowIndexForLiveCrawl(now: Date = Date()) {
+        if let index = rowIndex {
+            if index.sort.isAppendable {
+                index.appendNewIds()
+            } else if now.timeIntervalSince(lastSortRebuild) >= Self.sortRebuildInterval {
+                index.rebuild(sort: index.sort, ascending: index.ascending)
+                lastSortRebuild = now
+            }
+        }
+        rows?.refresh()
+        revision &+= 1
+    }
+
     private func startTicking() {
         tickTask?.cancel()
         tickTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 guard let self, self.state.isActive else { return }
-                self.rowIndex?.appendNewIds()
-                self.rows?.refresh()
-                self.revision &+= 1
+                self.refreshRowIndexForLiveCrawl()
             }
         }
     }

@@ -22,6 +22,16 @@ public enum URLTableColumn: String, CaseIterable, Sendable {
         case .depth: return 60
         }
     }
+
+    /// Which ordering this column's header applies when clicked.
+    public var sortColumn: SortColumn {
+        switch self {
+        case .address: return .address
+        case .status: return .status
+        case .title: return .title
+        case .depth: return .depth
+        }
+    }
 }
 
 /// Bridges `RowStore` to `NSTableView`. Split out from the representable so it
@@ -30,12 +40,30 @@ public enum URLTableColumn: String, CaseIterable, Sendable {
 public final class URLTableCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
     public var rows: RowStore?
 
+    /// Called when the user clicks a column header. The controller rebuilds the
+    /// index and reloads; the coordinator does not sort anything itself.
+    public var onSortChange: ((SortColumn, Bool) -> Void)?
+
     public init(rows: RowStore?) {
         self.rows = rows
     }
 
     public func numberOfRows(in tableView: NSTableView) -> Int {
         rows?.count ?? 0
+    }
+
+    public static func sort(from descriptor: NSSortDescriptor) -> (column: SortColumn, ascending: Bool)? {
+        guard let key = descriptor.key,
+              let column = URLTableColumn(rawValue: key)
+        else { return nil }
+        return (column.sortColumn, descriptor.ascending)
+    }
+
+    public func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
+        guard let descriptor = tableView.sortDescriptors.first,
+              let resolved = Self.sort(from: descriptor)
+        else { return }
+        onSortChange?(resolved.column, resolved.ascending)
     }
 
     /// Returns the display string for a cell. Missing data renders empty rather
@@ -97,10 +125,14 @@ public struct URLTableView: NSViewRepresentable {
     /// Changes whenever the controller wants a reload — bumping it is how the
     /// 2 Hz tick reaches the table.
     private let revision: Int
+    /// Fired when the user clicks a column header. `nil` when nobody wants to
+    /// hear about it (kept optional so previews and tests don't need one).
+    private let onSortChange: ((SortColumn, Bool) -> Void)?
 
-    public init(rows: RowStore?, revision: Int) {
+    public init(rows: RowStore?, revision: Int, onSortChange: ((SortColumn, Bool) -> Void)? = nil) {
         self.rows = rows
         self.revision = revision
+        self.onSortChange = onSortChange
     }
 
     public func makeNSView(context: Context) -> NSScrollView {
@@ -110,11 +142,13 @@ public struct URLTableView: NSViewRepresentable {
         table.allowsMultipleSelection = false
         table.dataSource = context.coordinator
         table.delegate = context.coordinator
+        context.coordinator.onSortChange = onSortChange
 
         for column in URLTableColumn.allCases {
             let tableColumn = NSTableColumn(identifier: .init(column.rawValue))
             tableColumn.title = column.title
             tableColumn.width = column.width
+            tableColumn.sortDescriptorPrototype = NSSortDescriptor(key: column.rawValue, ascending: true)
             table.addTableColumn(tableColumn)
         }
 
@@ -128,6 +162,7 @@ public struct URLTableView: NSViewRepresentable {
     public func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let table = scrollView.documentView as? NSTableView else { return }
         context.coordinator.rows = rows
+        context.coordinator.onSortChange = onSortChange
 
         // A table that jumps to the top twice a second is unusable, so preserve
         // both selection and scroll position across the live-crawl reload.

@@ -35,7 +35,11 @@ public struct ContentView: View {
                 noticeBanner(notice)
                 Divider()
             }
-            URLTableView(rows: controller.rows, revision: controller.revision)
+            URLTableView(rows: controller.rows,
+                         revision: controller.revision,
+                         onSortChange: { column, ascending in
+                             controller.applySort(column, ascending: ascending)
+                         })
         }
         .frame(minWidth: 900, minHeight: 500)
     }
