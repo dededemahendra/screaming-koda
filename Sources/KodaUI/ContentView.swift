@@ -36,10 +36,12 @@ public struct ContentView: View {
                 Divider()
             }
             URLTableView(rows: controller.rows,
+                         report: controller.selectedReport,
                          revision: controller.revision,
-                         onSortChange: { column, ascending in
-                             controller.applySort(column, ascending: ascending)
-                         })
+                         onSortChange: { columnID, ascending in
+                             controller.applySort(columnID: columnID, ascending: ascending)
+                         },
+                         onSelect: { controller.selectRow(id: $0) })
         }
         .frame(minWidth: 900, minHeight: 500)
         .sheet(item: Binding(

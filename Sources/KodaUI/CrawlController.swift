@@ -33,6 +33,15 @@ public final class CrawlController {
     /// rebuilds) so a large crawl still spends nearly all of its live-refresh
     /// time on the cheap append, not a full re-sort.
     static let liveFullRebuildInterval: TimeInterval = 5
+    /// How often the sidebar's issue counts are recomputed during a crawl.
+    ///
+    /// Slower than everything else on purpose. Counts are one conditional-
+    /// aggregation scan over every URL in the crawl, so at 500,000 rows doing it
+    /// on every 2 Hz tick would spend the machine's time counting rather than
+    /// crawling. The table is what the user is watching; a count two seconds
+    /// stale is not a defect. Counts are refreshed unconditionally once the
+    /// crawl stops, so the final numbers are never a stale sample.
+    static let countsRefreshInterval: TimeInterval = 2
 
     public var seedURL: String = ""
 
@@ -46,6 +55,24 @@ public final class CrawlController {
     /// Bumped on every tick so the table knows to reload.
     public private(set) var revision = 0
 
+    /// Which tab and filter the table is showing. Held as ids rather than as
+    /// values so selection survives `Reports.all` being rebuilt.
+    public private(set) var selectedReportID: String = Reports.internalURLs.id
+    public private(set) var selectedFilterID: String = Reports.internalURLs.defaultFilter.id
+    /// Row counts keyed "reportID.filterID", for the sidebar.
+    public private(set) var counts: [String: Int] = [:]
+    /// The row the inspector is describing, or nil when nothing is selected.
+    public private(set) var selectedRowID: Int64?
+
+    public var selectedReport: Report {
+        Reports.all.first { $0.id == selectedReportID } ?? Reports.internalURLs
+    }
+
+    public var selectedFilter: ReportFilter {
+        let report = selectedReport
+        return report.filters.first { $0.id == selectedFilterID } ?? report.defaultFilter
+    }
+
     /// Set when Start found an existing crawl for this host and is waiting for
     /// the user to choose. The window presents a sheet; nothing happens until
     /// they answer.
@@ -58,6 +85,12 @@ public final class CrawlController {
     /// which is what every existing test relies on.
     @ObservationIgnored private let crawlsDirectory: (@MainActor @Sendable () -> URL)?
     @ObservationIgnored private var engine: CrawlEngine?
+    /// Kept so the sidebar counts and the inspector can query after the crawl
+    /// task has finished with it. Internal rather than private so tests can
+    /// change the database behind the controller's back and prove a refresh
+    /// really did (or did not) re-run — a throttle test that cannot observe the
+    /// underlying data can only ever assert that nothing changed.
+    @ObservationIgnored private(set) var store: Store?
     /// Backs `rows`. `RowStore` only fetches by id now (Task 6) — this is what
     /// actually notices new rows a live crawl has added; `rows?.refresh()`
     /// alone no longer does, since it only drops the page cache.
@@ -69,6 +102,8 @@ public final class CrawlController {
     /// Last periodic full rebuild under the default sort; throttled by
     /// `liveFullRebuildInterval`.
     @ObservationIgnored private var lastFullRebuild = Date.distantPast
+    /// Last sidebar count refresh; throttled by `countsRefreshInterval`.
+    @ObservationIgnored private var lastCountsRefresh = Date.distantPast
     /// Tracks whether the robots-unreachable notice was already shown this run,
     /// independent of whatever else `notice` may also contain (such as a
     /// "database replaced" message set earlier in `start()`) — the emptiness
@@ -188,10 +223,14 @@ public final class CrawlController {
         }
 
         engine = prepared.engine
-        let freshIndex = RowIndex(store: prepared.store)
-        freshIndex.rebuild(sort: .discoveryOrder, ascending: true)
+        store = prepared.store
+        selectedRowID = nil
+        let freshIndex = RowIndex(store: prepared.store, report: selectedReport)
+        freshIndex.rebuild(report: selectedReport, filter: selectedFilter,
+                           sortColumnID: nil, ascending: true)
         rowIndex = freshIndex
         rows = RowStore(store: prepared.store, index: freshIndex)
+        refreshCounts(force: true)
         state = .running
 
         let engine = prepared.engine
@@ -221,10 +260,9 @@ public final class CrawlController {
                 // sort, any row added since the last throttled rebuild.
                 // Performance no longer matters once the crawl has stopped, so
                 // there is no reason to take the cheap-but-incomplete path here.
-                if let index = self.rowIndex {
-                    index.rebuild(sort: index.sort, ascending: index.ascending)
-                }
+                self.rowIndex?.rebuild()
                 self.rows?.refresh()
+                self.refreshCounts(force: true)
                 self.revision &+= 1
                 self.explainEmptyCrawlIfNeeded(store: store)
                 self.stopTicking()
@@ -252,13 +290,48 @@ public final class CrawlController {
 
     /// Rebuilds the index under a newly chosen sort and reloads. Called from a
     /// column header click; the coordinator resolves which column and
-    /// direction, this is where it's actually applied.
-    public func applySort(_ column: SortColumn, ascending: Bool) {
+    /// direction, this is where it's actually applied. An id the current report
+    /// does not declare is ignored by `RowIndex`, so it cannot reach the SQL.
+    public func applySort(columnID: String, ascending: Bool) {
         guard let index = rowIndex else { return }
-        index.rebuild(sort: column, ascending: ascending)
+        index.rebuild(report: index.report, filter: index.filter,
+                      sortColumnID: columnID, ascending: ascending)
         lastSortRebuild = Date()
         rows?.refresh()
         revision &+= 1
+    }
+
+    /// Switches tab or filter. Clears the selection, because row 4 of Titles is
+    /// not row 4 of Images and carrying the index over would silently point the
+    /// inspector at an unrelated URL. An unknown id is ignored rather than
+    /// crashing — the sidebar is the only caller, but it is a public entry point.
+    public func select(reportID: String, filterID: String? = nil) {
+        guard let report = Reports.all.first(where: { $0.id == reportID }) else { return }
+        let filter = filterID.flatMap { id in report.filters.first { $0.id == id } }
+            ?? report.defaultFilter
+        selectedReportID = report.id
+        selectedFilterID = filter.id
+        selectedRowID = nil
+        rowIndex?.rebuild(report: report, filter: filter, sortColumnID: nil, ascending: true)
+        lastSortRebuild = Date()
+        rows?.refresh()
+        revision &+= 1
+    }
+
+    public func selectRow(id: Int64?) {
+        selectedRowID = id
+    }
+
+    /// Recomputes the sidebar counts, at most once per `countsRefreshInterval`
+    /// unless forced. Internal so tests can drive it with an injected clock
+    /// rather than waiting on the real tick.
+    func refreshCounts(force: Bool = false, now: Date = Date()) {
+        guard let store else { return }
+        if !force, now.timeIntervalSince(lastCountsRefresh) < Self.countsRefreshInterval { return }
+        lastCountsRefresh = now
+        // A failed read keeps the previous counts rather than blanking the
+        // sidebar: the same rule the row index follows.
+        if let fresh = try? store.counts(for: Reports.all) { counts = fresh }
     }
 
     /// A crawl that fetched nothing because robots.txt disallowed it looks
@@ -303,18 +376,19 @@ public final class CrawlController {
     /// instead, since the user is actively watching that one.
     func refreshRowIndexForLiveCrawl(now: Date = Date()) {
         if let index = rowIndex {
-            if index.sort.isAppendable {
+            if index.isAppendable {
                 index.appendNewIds()
                 if now.timeIntervalSince(lastFullRebuild) >= Self.liveFullRebuildInterval {
-                    index.rebuild(sort: index.sort, ascending: index.ascending)
+                    index.rebuild()
                     lastFullRebuild = now
                 }
             } else if now.timeIntervalSince(lastSortRebuild) >= Self.sortRebuildInterval {
-                index.rebuild(sort: index.sort, ascending: index.ascending)
+                index.rebuild()
                 lastSortRebuild = now
             }
         }
         rows?.refresh()
+        refreshCounts(now: now)
         revision &+= 1
     }
 

@@ -2,22 +2,13 @@ import Foundation
 import GRDB
 import KodaCore
 
-public struct CrawlRow: Identifiable, Equatable, Sendable {
-    public let id: Int64
-    public let address: String
-    public let status: Int?
-    public let title: String?
-    public let depth: Int
-}
-
 /// Pages rows out of SQLite so the table never holds the whole crawl in memory.
 ///
 /// Reads are synchronous because `NSTableView` asks for cell values during
-/// draw, and an indexed page fetch is sub-millisecond. Row order and count
-/// come from `RowIndex`, which owns both the sort and `Store.visibleURLsFilter`
-/// — `RowStore`'s job is only to fetch the contents of a slice of ids, by
-/// primary key, at O(1) cost regardless of how deep into the crawl that slice
-/// falls.
+/// draw, and an indexed page fetch is sub-millisecond. Row order, count, and
+/// which report's columns to fetch all come from `RowIndex` — `RowStore`'s job
+/// is only to fetch the contents of a slice of ids, by primary key, at O(1)
+/// cost regardless of how deep into the crawl that slice falls.
 @MainActor
 public final class RowStore {
     private let store: Store
@@ -25,7 +16,7 @@ public final class RowStore {
     private let pageSize: Int
     private let maxPages: Int
 
-    private var pages: [Int: [CrawlRow]] = [:]
+    private var pages: [Int: [ReportRow]] = [:]
     private var lru: [Int] = []
 
     /// Counts actual `loadPage` executions (cache misses), so tests can prove a
@@ -55,7 +46,20 @@ public final class RowStore {
         lru.removeAll()
     }
 
-    public func row(at rowIndex: Int) -> CrawlRow? {
+    /// The value of a named column for a row. Cells are positional, so this is
+    /// the one place that translates a column id into an offset — call sites
+    /// that hard-code an index go stale the moment a report's columns change.
+    ///
+    /// Returns nil both for a row that is out of range and for a genuine SQL
+    /// NULL; callers that need to tell those apart check `row(at:)` first.
+    public func value(_ columnID: String, at rowIndex: Int) -> String? {
+        guard let position = index.report.columns.firstIndex(where: { $0.id == columnID }),
+              let row = row(at: rowIndex), position < row.cells.count
+        else { return nil }
+        return row.cells[position]
+    }
+
+    public func row(at rowIndex: Int) -> ReportRow? {
         guard rowIndex >= 0, rowIndex < index.count else { return nil }
         let pageIndex = rowIndex / pageSize
         if let cached = pages[pageIndex] {
@@ -78,7 +82,7 @@ public final class RowStore {
         lru.append(pageIndex)
     }
 
-    private func loadPage(_ pageIndex: Int) -> [CrawlRow] {
+    private func loadPage(_ pageIndex: Int) -> [ReportRow] {
         loadCount += 1
         let start = pageIndex * pageSize
         let end = min(start + pageSize, index.count)
@@ -86,26 +90,11 @@ public final class RowStore {
         let wanted: [Int64] = (start..<end).compactMap { index.id(at: $0) }
         guard !wanted.isEmpty else { return [] }
 
-        let placeholders = Array(repeating: "?", count: wanted.count).joined(separator: ",")
-        let fetched: [Int64: CrawlRow] = (try? store.dbQueue.read { db in
-            try Row.fetchAll(db, sql: """
-                SELECT u.id AS id, u.url AS url, r.status AS status, f.title AS title, u.depth AS depth
-                FROM urls u
-                LEFT JOIN responses r ON r.url_id = u.id
-                LEFT JOIN page_facts f ON f.url_id = u.id
-                WHERE u.id IN (\(placeholders))
-                """, arguments: StatementArguments(wanted))
-            .reduce(into: [Int64: CrawlRow]()) { acc, row in
-                let id: Int64 = row["id"]
-                acc[id] = CrawlRow(id: id, address: row["url"], status: row["status"],
-                                   title: row["title"], depth: row["depth"])
-            }
-        }) ?? [:]
-
-        // `IN` returns rows in whatever order SQLite likes, so reorder to match
-        // the index. Without this the table would show correct rows in the wrong
-        // places — which looks like data corruption rather than a sorting bug.
-        let rows = wanted.compactMap { fetched[$0] }
+        // The report owns both which columns to select and the order they come
+        // back in; the store restores the order of `wanted`, since `IN` does not
+        // preserve it. Without that the table would show correct rows in the
+        // wrong places, which reads as data corruption rather than a sort bug.
+        let rows = (try? store.rows(ids: wanted, columns: index.report.columns)) ?? []
 
         pages[pageIndex] = rows
         touch(pageIndex)

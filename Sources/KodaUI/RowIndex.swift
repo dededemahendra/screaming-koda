@@ -2,37 +2,7 @@ import Foundation
 import GRDB
 import KodaCore
 
-public enum SortColumn: String, CaseIterable, Sendable {
-    /// The default: the order URLs were discovered in. Not a clickable column —
-    /// it is the state the table is in before the user sorts anything, and it
-    /// matches how the table behaved before this milestone.
-    case discoveryOrder
-    case address, status, title, depth
-
-    /// The SQL expression to order by. Kept here rather than at the call site so
-    /// there is one place that decides what "sort by status" means.
-    var orderExpression: String {
-        switch self {
-        case .discoveryOrder: return "u.id"
-        case .address: return "u.url"
-        case .status: return "r.status"
-        case .title: return "f.title"
-        case .depth: return "u.depth"
-        }
-    }
-
-    /// Only discovery order can be appended to during a live crawl. New rows
-    /// always get larger ids, so they belong at the end — but under any other
-    /// sort a new row could belong anywhere, and appending it would put the
-    /// table in a wrong order that looks plausible. Those sorts rebuild instead.
-    var isAppendable: Bool { self == .discoveryOrder }
-
-    /// The columns a user can actually click. `discoveryOrder` is excluded
-    /// because there is no column header for it.
-    public static var selectable: [SortColumn] { [.address, .status, .title, .depth] }
-}
-
-/// The ordered list of row ids behind the table.
+/// The ordered list of row ids behind the table, for one report and filter.
 ///
 /// `NSTableView` asks for arbitrary rows, so the table needs random access into
 /// a sorted result. Holding the ordered ids gives that in O(1) — row `N` is
@@ -42,11 +12,17 @@ public enum SortColumn: String, CaseIterable, Sendable {
 public final class RowIndex {
     private let store: Store
     public private(set) var ids: [Int64] = []
-    public private(set) var sort: SortColumn = .discoveryOrder
+    public private(set) var report: Report
+    public private(set) var filter: ReportFilter
+    /// nil means discovery order, which is the state the table is in before the
+    /// user clicks any header. There is no header for it, so it cannot be chosen.
+    public private(set) var sortColumnID: String?
     public private(set) var ascending = true
 
-    public init(store: Store) {
+    public init(store: Store, report: Report = Reports.internalURLs) {
         self.store = store
+        self.report = report
+        self.filter = report.defaultFilter
     }
 
     public var count: Int { ids.count }
@@ -56,43 +32,66 @@ public final class RowIndex {
         return ids[index]
     }
 
+    /// The resolved sort column, or nil for discovery order. Resolution against
+    /// the report's own columns is the allow-list: an id this report does not
+    /// declare has no expression, so it cannot reach the ORDER BY.
+    public var sortColumn: ReportColumn? {
+        sortColumnID.flatMap { report.column(id: $0) }
+    }
+
     /// Re-runs the ordering query. On failure the previous ordering is kept, so
     /// a transient read error leaves the table usable rather than empty.
-    public func rebuild(sort: SortColumn, ascending: Bool) {
-        let direction = ascending ? "ASC" : "DESC"
-        // Nulls last in BOTH directions: a table sorted by status should open on
-        // real statuses whichever way the arrow points.
-        let sql = """
-            SELECT u.id
-            FROM urls u
-            LEFT JOIN responses r ON r.url_id = u.id
-            LEFT JOIN page_facts f ON f.url_id = u.id
-            WHERE \(Store.visibleURLsFilter)
-            ORDER BY (\(sort.orderExpression) IS NULL) ASC, \(sort.orderExpression) \(direction), u.id ASC
-            """
-        guard let fresh = try? store.dbQueue.read({ db in try Int64.fetchAll(db, sql: sql) }) else {
-            return
-        }
+    public func rebuild(report: Report, filter: ReportFilter,
+                        sortColumnID: String?, ascending: Bool) {
+        let column = sortColumnID.flatMap { report.column(id: $0) }
+        guard let fresh = try? store.ids(for: report, filter: filter,
+                                         sortBy: column, ascending: ascending)
+        else { return }
         self.ids = fresh
-        self.sort = sort
+        self.report = report
+        self.filter = filter
+        // Only remember a sort the report actually accepted, so a stale id left
+        // over from another tab cannot silently persist as the current sort.
+        self.sortColumnID = column?.id
         self.ascending = ascending
     }
 
-    /// Fast path for a live crawl under the default sort: fetch only ids beyond
-    /// the largest one already held, instead of re-sorting the whole crawl twice
-    /// a second. Returns whether anything was added.
+    /// Re-runs the current query, for the periodic refresh during a live crawl.
+    public func rebuild() {
+        rebuild(report: report, filter: filter, sortColumnID: sortColumnID, ascending: ascending)
+    }
+
+    /// Whether the cheap per-tick append is sound for the current view.
+    ///
+    /// It requires two things. Discovery order ascending, because new rows get
+    /// larger ids and so genuinely belong at the end — under any other sort a
+    /// new row could belong anywhere, and appending it would produce a wrong
+    /// order that looks plausible. And the unfiltered Internal report, because
+    /// appending can only ever *add*: on a filtered report a row can stop
+    /// matching (a page missing a title gains one, so it leaves Titles →
+    /// Missing) and no append will ever remove it. Nothing leaves Internal → All.
+    var isAppendable: Bool {
+        sortColumnID == nil && ascending
+            && report.id == Reports.internalURLs.id
+            && filter.id == report.defaultFilter.id
+    }
+
+    /// Fast path for a live crawl: fetch only ids beyond the largest one already
+    /// held, instead of re-sorting the whole crawl twice a second. Returns
+    /// whether anything was added.
     @discardableResult
     public func appendNewIds() -> Bool {
-        guard sort.isAppendable, ascending else { return false }
+        guard isAppendable else { return false }
         let after = ids.last ?? 0
         let sql = """
-            SELECT u.id FROM urls u
-            WHERE u.id > ? AND \(Store.visibleURLsFilter)
+            SELECT u.id
+            \(ReportSQL.from)
+            WHERE u.id > \(after) AND (\(report.predicate)) AND (\(filter.predicate))
             ORDER BY u.id ASC
             """
-        guard let fresh = try? store.dbQueue.read({ db in
-            try Int64.fetchAll(db, sql: sql, arguments: [after])
-        }), !fresh.isEmpty else { return false }
+        guard let fresh = try? store.dbQueue.read({ db in try Int64.fetchAll(db, sql: sql) }),
+              !fresh.isEmpty
+        else { return false }
         ids.append(contentsOf: fresh)
         return true
     }

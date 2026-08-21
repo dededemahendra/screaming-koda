@@ -31,6 +31,15 @@ private func seeded() throws -> Store {
     return store
 }
 
+/// The unfiltered Internal report, which is what these tests exercise: the
+/// table's default view. Report-specific behaviour lives in ReportSelectionTests.
+@MainActor
+private func rebuild(_ index: RowIndex, sortColumnID: String? = nil, ascending: Bool = true) {
+    index.rebuild(report: Reports.internalURLs,
+                  filter: Reports.internalURLs.defaultFilter,
+                  sortColumnID: sortColumnID, ascending: ascending)
+}
+
 @MainActor
 private func urls(_ store: Store, _ index: RowIndex) throws -> [String] {
     try store.dbQueue.read { db in
@@ -44,7 +53,7 @@ private func urls(_ store: Store, _ index: RowIndex) throws -> [String] {
 @Test func sortsByAddressAscending() throws {
     let store = try seeded()
     let index = RowIndex(store: store)
-    index.rebuild(sort: .address, ascending: true)
+    rebuild(index, sortColumnID: "address", ascending: true)
     #expect(try urls(store, index).map { String($0.suffix(1)) } == ["a", "b", "c", "d"])
 }
 
@@ -52,7 +61,7 @@ private func urls(_ store: Store, _ index: RowIndex) throws -> [String] {
 @Test func sortsByAddressDescending() throws {
     let store = try seeded()
     let index = RowIndex(store: store)
-    index.rebuild(sort: .address, ascending: false)
+    rebuild(index, sortColumnID: "address", ascending: false)
     #expect(try urls(store, index).map { String($0.suffix(1)) } == ["d", "c", "b", "a"])
 }
 
@@ -60,7 +69,7 @@ private func urls(_ store: Store, _ index: RowIndex) throws -> [String] {
 @Test func sortsByStatus() throws {
     let store = try seeded()
     let index = RowIndex(store: store)
-    index.rebuild(sort: .status, ascending: true)
+    rebuild(index, sortColumnID: "status", ascending: true)
     // 200, 301, 404, 500 → /a, /b, /c, /d
     #expect(try urls(store, index).map { String($0.suffix(1)) } == ["a", "b", "c", "d"])
 }
@@ -69,7 +78,7 @@ private func urls(_ store: Store, _ index: RowIndex) throws -> [String] {
 @Test func sortsByTitle() throws {
     let store = try seeded()
     let index = RowIndex(store: store)
-    index.rebuild(sort: .title, ascending: true)
+    rebuild(index, sortColumnID: "title", ascending: true)
     // Apple, Banana, Mango, Zebra → /a, /b, /c, /d
     #expect(try urls(store, index).map { String($0.suffix(1)) } == ["a", "b", "c", "d"])
 }
@@ -78,7 +87,7 @@ private func urls(_ store: Store, _ index: RowIndex) throws -> [String] {
 @Test func sortsByDepth() throws {
     let store = try seeded()
     let index = RowIndex(store: store)
-    index.rebuild(sort: .depth, ascending: true)
+    rebuild(index, sortColumnID: "depth", ascending: true)
     // depths 0,1,2,3 → /c, /a, /b, /d
     #expect(try urls(store, index).map { String($0.suffix(1)) } == ["c", "a", "b", "d"])
 }
@@ -95,7 +104,7 @@ private func urls(_ store: Store, _ index: RowIndex) throws -> [String] {
         try db.execute(sql: "INSERT INTO links (from_url_id, to_url_id, anchor_text, rel, is_internal, position) VALUES (1,5,'q',NULL,1,0)")
     }
     let index = RowIndex(store: store)
-    index.rebuild(sort: .status, ascending: true)
+    rebuild(index, sortColumnID: "status", ascending: true)
     #expect(try urls(store, index).last == "https://s.test/queued")
 }
 
@@ -110,7 +119,7 @@ private func urls(_ store: Store, _ index: RowIndex) throws -> [String] {
         try db.execute(sql: "INSERT INTO links (from_url_id, to_url_id, anchor_text, rel, is_internal, position) VALUES (1,5,'q',NULL,1,0)")
     }
     let index = RowIndex(store: store)
-    index.rebuild(sort: .status, ascending: false)
+    rebuild(index, sortColumnID: "status", ascending: false)
     #expect(try urls(store, index).last == "https://s.test/queued",
             "a table sorted either way should open on real values, not blanks")
 }
@@ -119,7 +128,7 @@ private func urls(_ store: Store, _ index: RowIndex) throws -> [String] {
 @Test func idAtBoundsIsSafe() throws {
     let store = try seeded()
     let index = RowIndex(store: store)
-    index.rebuild(sort: .address, ascending: true)
+    rebuild(index, sortColumnID: "address", ascending: true)
     #expect(index.count == 4)
     #expect(index.id(at: 0) != nil)
     #expect(index.id(at: 3) != nil)
@@ -139,7 +148,7 @@ private func urls(_ store: Store, _ index: RowIndex) throws -> [String] {
         try db.execute(sql: "INSERT INTO responses (url_id, status, fetched_at) VALUES (5,200,0)")
     }
     let index = RowIndex(store: store)
-    index.rebuild(sort: .address, ascending: true)
+    rebuild(index, sortColumnID: "address", ascending: true)
     #expect(index.count == 4, "a fetched image is still not a row in the URL table")
 }
 
@@ -147,7 +156,7 @@ private func urls(_ store: Store, _ index: RowIndex) throws -> [String] {
 @Test func appendNewIdsPicksUpRowsAddedMidCrawl() throws {
     let store = try seeded()
     let index = RowIndex(store: store)
-    index.rebuild(sort: .discoveryOrder, ascending: true)
+    rebuild(index, ascending: true)
     #expect(index.count == 4)
 
     try store.dbQueue.write { db in
@@ -167,9 +176,30 @@ private func urls(_ store: Store, _ index: RowIndex) throws -> [String] {
 @Test func appendNewIdsRefusesUnderANonDefaultSort() throws {
     let store = try seeded()
     let index = RowIndex(store: store)
-    index.rebuild(sort: .status, ascending: true)
+    rebuild(index, sortColumnID: "status", ascending: true)
     let grew = index.appendNewIds()
     #expect(!grew, "appending only makes sense in discovery order; other sorts must rebuild")
+}
+
+/// Appending can only ever add. On a filtered report a row can stop matching —
+/// a page missing a title gains one and leaves Titles → Missing — and no append
+/// will ever remove it, so filtered views must rebuild instead.
+@MainActor
+@Test func appendNewIdsRefusesOnAFilteredReport() throws {
+    let store = try seeded()
+    let index = RowIndex(store: store)
+    let missing = Reports.titles.filters.first { $0.id == "missing" }!
+    index.rebuild(report: Reports.titles, filter: missing, sortColumnID: nil, ascending: true)
+    #expect(!index.appendNewIds())
+}
+
+/// Descending discovery order is not id order either.
+@MainActor
+@Test func appendNewIdsRefusesWhenDescending() throws {
+    let store = try seeded()
+    let index = RowIndex(store: store)
+    rebuild(index, ascending: false)
+    #expect(!index.appendNewIds())
 }
 
 @MainActor
@@ -178,7 +208,7 @@ private func urls(_ store: Store, _ index: RowIndex) throws -> [String] {
     // anywhere in the list — appending it would look plausible and be wrong.
     let store = try seeded()
     let index = RowIndex(store: store)
-    index.rebuild(sort: .address, ascending: true)
+    rebuild(index, sortColumnID: "address", ascending: true)
     #expect(!index.appendNewIds())
 }
 
@@ -186,5 +216,7 @@ private func urls(_ store: Store, _ index: RowIndex) throws -> [String] {
 @Test func discoveryOrderIsTheDefaultBeforeAnyRebuild() throws {
     let store = try seeded()
     let index = RowIndex(store: store)
-    #expect(index.sort == .discoveryOrder)
+    #expect(index.sortColumnID == nil)
+    #expect(index.report.id == Reports.internalURLs.id)
+    #expect(index.filter.id == Reports.internalURLs.defaultFilter.id)
 }

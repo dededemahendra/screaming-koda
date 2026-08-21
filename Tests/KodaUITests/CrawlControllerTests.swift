@@ -239,7 +239,8 @@ private func directoryProvider(_ tempRoot: URL) -> @MainActor @Sendable () -> UR
 @MainActor
 private func visibleAddresses(_ c: CrawlController) -> [String] {
     guard let rows = c.rows else { return [] }
-    return (0..<rows.count).compactMap { rows.row(at: $0)?.address }
+    // Address is the Internal report's first column.
+    return (0..<rows.count).compactMap { rows.row(at: $0)?.cells.first ?? nil }
 }
 
 /// The correctness fix Task 7 owns: `RowIndex.appendNewIds()` advances a
