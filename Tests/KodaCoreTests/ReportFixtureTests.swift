@@ -51,3 +51,14 @@ import Testing
     }
     #expect(badCanonical == 0, "a canonical target path did not resolve")
 }
+
+/// The auto-generated defaults must stay unique, or pages that never opted into
+/// a shared title silently become Duplicate findings and every count in the
+/// Titles, Meta Description, and Headings reports is wrong.
+@Test func fixtureAutoValuesAreUniquePerPage() {
+    let paths = ReportFixture.pages.map(\.path)
+    for make in [ReportFixture.autoTitle, ReportFixture.autoDesc, ReportFixture.autoH1] {
+        let values = paths.map(make)
+        #expect(Set(values).count == values.count)
+    }
+}
