@@ -161,3 +161,87 @@ private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) async
             "re-crawling the same host must say the old database was replaced; got: \(notice)")
     #expect((second.rows?.count ?? 0) >= 3, "the new crawl's own rows must still show up")
 }
+
+@MainActor
+private func visibleAddresses(_ c: CrawlController) -> [String] {
+    guard let rows = c.rows else { return [] }
+    return (0..<rows.count).compactMap { rows.row(at: $0)?.address }
+}
+
+/// The correctness fix Task 7 owns: `RowIndex.appendNewIds()` advances a
+/// watermark from the largest id it holds and only ever fetches ids above it.
+/// A URL that was hidden by `Store.visibleURLsFilter` when first discovered —
+/// an image-only URL — and later becomes visible because a real link to it
+/// appears has an id *below* that watermark, so a pure append can never find
+/// it. `CrawlController.refreshRowIndexForLiveCrawl` must periodically do a
+/// full rebuild under the default sort so a URL like this is not silently
+/// missing from the crawl forever. `now` is injected so this test can
+/// simulate the throttle interval elapsing without sleeping for real.
+@MainActor
+@Test func aLateRevealedImageOnlyURLEventuallyAppearsAfterTheAppendWatermarkPassesIt() async throws {
+    let tempFile = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).koda")
+    defer { try? FileManager.default.removeItem(at: tempFile) }
+
+    let c = CrawlController(client: ThreePageClient(), parser: SwiftSoupParser(), dbPath: tempFile.path)
+    c.seedURL = "https://three.test/"
+    await c.start()
+    #expect(await waitUntil { c.state == .finished })
+
+    // A second handle onto the same on-disk database, standing in for direct
+    // seeding of rows the crawler itself did not (yet) produce.
+    let store = try Store(path: tempFile.path)
+    let existingPageId = try await store.dbQueue.read { db in
+        try Int64.fetchOne(db, sql: "SELECT MAX(id) FROM urls") ?? 0
+    }
+    #expect(existingPageId > 0)
+
+    // A URL discovered only as an image source — hidden by the visibility
+    // filter — immediately followed by a normal, visible page with a higher
+    // id. `RowIndex.appendNewIds()`'s watermark is the *last id it actually
+    // appended*, not "the largest id it has ever seen" — so the image being
+    // skipped over here, while the normal page right after it is appended,
+    // is exactly what leaves the image permanently below the watermark.
+    try await store.dbQueue.write { db in
+        try db.execute(sql: """
+            INSERT INTO urls (url, url_hash, host, path, depth, is_internal, discovered_at, state) VALUES
+              ('https://three.test/pic.png', ?, 'three.test', '/pic.png', 1, 1, 0, 2),
+              ('https://three.test/later', ?, 'three.test', '/later', 1, 1, 0, 2)
+            """, arguments: [Data([0xAB, 0xCD, 0xEF, 0x01]), Data([0xAB, 0xCD, 0xEF, 0x02])])
+        try db.execute(sql: """
+            INSERT INTO images (url_id, src_url_id, alt)
+            VALUES (?, (SELECT id FROM urls WHERE url = 'https://three.test/pic.png'), 'a')
+            """, arguments: [existingPageId])
+    }
+    let imageId = try await store.dbQueue.read { db in
+        try Int64.fetchOne(db, sql: "SELECT id FROM urls WHERE url = 'https://three.test/pic.png'")!
+    }
+
+    // Advance the append watermark past the image's id: /later is picked up,
+    // pic.png correctly stays hidden.
+    let t0 = Date()
+    c.refreshRowIndexForLiveCrawl(now: t0)
+    #expect(visibleAddresses(c).contains("https://three.test/later"),
+            "the normal page above the image must show up")
+    #expect(!visibleAddresses(c).contains("https://three.test/pic.png"),
+            "an image-only URL is not a row in the URL table")
+
+    // A real link to the image now appears, flipping it visible per
+    // Store.visibleURLsFilter — but its id is below the watermark that was
+    // just advanced past it (to /later's id), so appendNewIds() alone can
+    // never see it again.
+    try await store.dbQueue.write { db in
+        try db.execute(sql: """
+            INSERT INTO links (from_url_id, to_url_id, anchor_text, rel, is_internal, position)
+            VALUES (?, ?, 'pic', NULL, 1, 0)
+            """, arguments: [existingPageId, imageId])
+    }
+
+    c.refreshRowIndexForLiveCrawl(now: t0.addingTimeInterval(1))
+    #expect(!visibleAddresses(c).contains("https://three.test/pic.png"),
+            "append alone must not find it — its id is below the watermark")
+
+    // Once the full-rebuild interval elapses, the periodic rebuild recovers it.
+    c.refreshRowIndexForLiveCrawl(now: t0.addingTimeInterval(CrawlController.liveFullRebuildInterval + 1))
+    #expect(visibleAddresses(c).contains("https://three.test/pic.png"),
+            "a URL revealed after the watermark passed it must eventually appear")
+}

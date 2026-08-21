@@ -162,7 +162,16 @@ public final class CrawlController {
             let finalState = await engine.state
             await MainActor.run {
                 self.state = finalState
-                self.rowIndex?.appendNewIds()
+                // A full rebuild, not just an append: ticking stops right after
+                // this, so this is the last chance to pick up anything that
+                // appendNewIds() alone would miss — a URL that became visible
+                // late (see refreshRowIndexForLiveCrawl), or, under a non-default
+                // sort, any row added since the last throttled rebuild.
+                // Performance no longer matters once the crawl has stopped, so
+                // there is no reason to take the cheap-but-incomplete path here.
+                if let index = self.rowIndex {
+                    index.rebuild(sort: index.sort, ascending: index.ascending)
+                }
                 self.rows?.refresh()
                 self.revision &+= 1
                 self.explainEmptyCrawlIfNeeded(store: store)
@@ -228,13 +237,26 @@ public final class CrawlController {
     /// injected `now`, without waiting on the real 500ms tick or the rebuild
     /// throttles below it.
     ///
-    /// Discovery order only ever appends, so a live crawl does not need to
-    /// re-sort for that. Any other sort rebuilds, throttled to
-    /// `sortRebuildInterval`.
+    /// Discovery order only ever appends on every tick — cheap, and correct
+    /// for the overwhelming majority of new rows, which really do belong at
+    /// the end. But `RowIndex.appendNewIds()`'s watermark is the last id it
+    /// has actually appended, not "the largest id that exists": a URL hidden
+    /// by `Store.visibleURLsFilter` when first discovered (an image-only URL)
+    /// that later becomes visible — a real link to it appears — can have an
+    /// id below that watermark forever, and a pure append will never find it
+    /// again. So alongside the append, this also does a full rebuild every
+    /// `liveFullRebuildInterval`, which is not id-relative and therefore
+    /// always catches such a URL. Any other (explicitly user-chosen) sort
+    /// always rebuilds, throttled to the shorter `sortRebuildInterval`
+    /// instead, since the user is actively watching that one.
     func refreshRowIndexForLiveCrawl(now: Date = Date()) {
         if let index = rowIndex {
             if index.sort.isAppendable {
                 index.appendNewIds()
+                if now.timeIntervalSince(lastFullRebuild) >= Self.liveFullRebuildInterval {
+                    index.rebuild(sort: index.sort, ascending: index.ascending)
+                    lastFullRebuild = now
+                }
             } else if now.timeIntervalSince(lastSortRebuild) >= Self.sortRebuildInterval {
                 index.rebuild(sort: index.sort, ascending: index.ascending)
                 lastSortRebuild = now
