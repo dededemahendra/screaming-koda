@@ -10,7 +10,7 @@ shell comes later.
 
 - macOS 14 or later
 - Swift 6.0 toolchain (Command Line Tools is enough)
-- `python3` on `PATH` for the end-to-end tests only
+- `/usr/bin/python3` for the end-to-end tests only (present by default on macOS)
 
 ## Build
 
