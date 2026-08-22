@@ -43,6 +43,7 @@ public struct PageFacts: Sendable {
     public var h1Count: Int = 0
     public var h2Count: Int = 0
     public var canonical: String?
+    public var canonicalCount: Int = 0
     public var metaRobots: String?
     public var lang: String?
     public var wordCount: Int = 0

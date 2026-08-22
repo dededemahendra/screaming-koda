@@ -59,23 +59,25 @@ extension Store {
                 INSERT INTO page_facts
                   (url_id, title, title_length, title_count,
                    meta_description, meta_description_length, meta_description_count,
-                   h1, h1_count, h2_count, canonical_id, meta_robots, x_robots_tag,
+                   h1, h1_count, h2_count, canonical_id, canonical_count, meta_robots, x_robots_tag,
                    lang, word_count, content_hash)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(url_id) DO UPDATE SET
                   title=excluded.title, title_length=excluded.title_length, title_count=excluded.title_count,
                   meta_description=excluded.meta_description,
                   meta_description_length=excluded.meta_description_length,
                   meta_description_count=excluded.meta_description_count,
                   h1=excluded.h1, h1_count=excluded.h1_count, h2_count=excluded.h2_count,
-                  canonical_id=excluded.canonical_id, meta_robots=excluded.meta_robots,
+                  canonical_id=excluded.canonical_id, canonical_count=excluded.canonical_count,
+                  meta_robots=excluded.meta_robots,
                   x_robots_tag=excluded.x_robots_tag, lang=excluded.lang,
                   word_count=excluded.word_count, content_hash=excluded.content_hash
                 """,
             arguments: [
                 result.urlID, facts.title, facts.titleLength, facts.titleCount,
                 facts.metaDescription, facts.metaDescriptionLength, facts.metaDescriptionCount,
-                facts.h1, facts.h1Count, facts.h2Count, canonicalID, facts.metaRobots, result.xRobotsTag,
+                facts.h1, facts.h1Count, facts.h2Count, canonicalID, facts.canonicalCount,
+                facts.metaRobots, result.xRobotsTag,
                 facts.lang, facts.wordCount, facts.contentHash,
             ]
         )

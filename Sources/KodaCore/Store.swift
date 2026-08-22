@@ -107,6 +107,9 @@ public final class Store: @unchecked Sendable {
         m.registerMigration("v2-redirect-hops") { db in
             try db.execute(sql: "ALTER TABLE urls ADD COLUMN redirect_hops INTEGER NOT NULL DEFAULT 0")
         }
+        m.registerMigration("v3-canonical-count") { db in
+            try db.execute(sql: "ALTER TABLE page_facts ADD COLUMN canonical_count INTEGER NOT NULL DEFAULT 0")
+        }
         return m
     }
 

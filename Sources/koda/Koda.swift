@@ -8,7 +8,7 @@ struct Koda: AsyncParsableCommand {
         commandName: "koda",
         abstract: "Crawl a site and report on it.",
         version: KodaCoreInfo.versionString,
-        subcommands: [Crawl.self],
+        subcommands: [Crawl.self, Report.self, Export.self],
         defaultSubcommand: Crawl.self
     )
 }
@@ -79,6 +79,7 @@ struct Crawl: AsyncParsableCommand {
         FileHandle.standardError.write(Data("\r\(String(repeating: " ", count: 60))\r".utf8))
         print()
         Self.printSummary(try store.summary(), elapsed: elapsed)
+        Self.printFindings(try store.reportCounts())
     }
 
     static func printSummary(_ s: CrawlSummary, elapsed: TimeInterval) {
@@ -97,11 +98,27 @@ struct Crawl: AsyncParsableCommand {
             line(key, s.byStatusClass[key] ?? 0)
         }
         if s.transportErrors > 0 { line("Transport errors", s.transportErrors) }
-        print("\nIssues")
-        line("Missing titles", s.missingTitles)
-        line("Duplicate titles", s.duplicateTitles)
-        line("Missing meta descriptions", s.missingDescriptions)
-        line("Missing H1", s.missingH1)
-        line("Images missing alt", s.imagesMissingAlt)
+    }
+
+    /// Every report that found something, grouped as the tabs will be. Listing only
+    /// non-empty reports keeps the tail of a crawl short on a clean site while still
+    /// surfacing everything on a messy one.
+    static func printFindings(_ counts: [String: Int]) {
+        let found = ReportCatalogue.issues.filter { (counts[$0.id] ?? 0) > 0 }
+        guard !found.isEmpty else {
+            print("\nNo findings.")
+            return
+        }
+        print("\nFindings")
+        for group in ReportCatalogue.groups {
+            let reports = found.filter { $0.group == group }
+            guard !reports.isEmpty else { continue }
+            print("  \(group)")
+            for report in reports {
+                let id = report.id.padding(toLength: 28, withPad: " ", startingAt: 0)
+                print("    \(id) \(counts[report.id] ?? 0)")
+            }
+        }
+        print("\nRun 'koda report <id>' to see one, or 'koda export' to write them all to CSV.")
     }
 }
