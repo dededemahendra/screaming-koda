@@ -1,0 +1,93 @@
+import ArgumentParser
+import Foundation
+import KodaCore
+
+@main
+struct Koda: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "koda",
+        abstract: "Crawl a site and report on it.",
+        version: KodaCoreInfo.versionString,
+        subcommands: [Crawl.self],
+        defaultSubcommand: Crawl.self
+    )
+}
+
+struct Crawl: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(abstract: "Crawl a site into a .koda database.")
+
+    @Argument(help: "Seed URL, for example https://example.com/")
+    var url: String
+
+    @Option(name: .long, help: "Database path. Defaults to a file named after the host.")
+    var db: String?
+
+    @Option(name: .long, help: "Concurrent workers.")
+    var workers: Int = 5
+
+    @Option(name: .long, help: "Stop after this many URLs.")
+    var limit: Int = 500_000
+
+    @Option(name: .long, help: "Maximum crawl depth.")
+    var maxDepth: Int?
+
+    @Flag(name: .long, help: "Ignore robots.txt. Use only on sites you control.")
+    var ignoreRobots = false
+
+    mutating func run() async throws {
+        var config = CrawlConfig(seedURL: url)
+        config.workers = workers
+        config.urlCap = limit
+        config.maxDepth = maxDepth
+        config.respectRobots = !ignoreRobots
+
+        guard let host = config.seedHost else {
+            throw ValidationError("Not a crawlable http(s) URL: \(url)")
+        }
+        let path = db ?? FileManager.default.currentDirectoryPath + "/\(host).koda"
+        if FileManager.default.fileExists(atPath: path) {
+            try FileManager.default.removeItem(atPath: path)
+        }
+
+        print("Crawling \(url) → \(path)")
+        if ignoreRobots { print("WARNING: ignoring robots.txt") }
+
+        let started = Date()
+        let store = try await CrawlSession.start(
+            dbPath: path, config: config,
+            client: URLSessionHTTPClient(), parser: SwiftSoupParser(),
+            onProgress: { progress in
+                FileHandle.standardError.write(
+                    Data("\rcrawled \(progress.crawled)  queued \(progress.queued)".utf8)
+                )
+            }
+        )
+        let elapsed = Date().timeIntervalSince(started)
+        print("\n")
+        Self.printSummary(try store.summary(), elapsed: elapsed)
+    }
+
+    static func printSummary(_ s: CrawlSummary, elapsed: TimeInterval) {
+        func line(_ label: String, _ value: Any) {
+            print("  \(label.padding(toLength: 26, withPad: " ", startingAt: 0)) \(value)")
+        }
+        print("Crawl finished in \(String(format: "%.1f", elapsed))s")
+        print("\nURLs")
+        line("Total discovered", s.totalURLs)
+        line("Crawled", s.crawledURLs)
+        line("Internal", s.internalURLs)
+        line("External", s.externalURLs)
+        line("Max depth", s.maxDepth)
+        print("\nResponses")
+        for key in s.byStatusClass.keys.sorted() {
+            line(key, s.byStatusClass[key] ?? 0)
+        }
+        if s.transportErrors > 0 { line("Transport errors", s.transportErrors) }
+        print("\nIssues")
+        line("Missing titles", s.missingTitles)
+        line("Duplicate titles", s.duplicateTitles)
+        line("Missing meta descriptions", s.missingDescriptions)
+        line("Missing H1", s.missingH1)
+        line("Images missing alt", s.imagesMissingAlt)
+    }
+}
