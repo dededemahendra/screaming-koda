@@ -35,7 +35,8 @@ let package = Package(
             dependencies: [
                 "KodaCore",
                 .product(name: "Testing", package: "swift-testing"),
-            ]
+            ],
+            resources: [.copy("Fixtures")]
         ),
     ]
 )
