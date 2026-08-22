@@ -3262,20 +3262,15 @@ git commit -m "feat: abandon redirect chains past the hop limit"
 
 ## M1 Completion Criteria
 
-- [ ] `swift test` passes with every test from Tasks 1–13
-- [ ] `koda crawl <url>` crawls a real site and prints a summary
-- [ ] Crawling the same site twice produces the same URL count
-- [ ] Interrupting a crawl and re-running against the same database resumes rather than restarting
-- [ ] `KodaCore` imports neither AppKit nor SwiftUI — verify with `grep -rE 'import (AppKit|SwiftUI)' Sources/KodaCore` returning nothing
+- [x] `swift test` passes with every test from Tasks 1–13 — 113 tests
+- [x] `koda crawl <url>` crawls a real site and prints a summary — verified against `https://example.com/`
+- [x] Crawling the same site twice produces the same URL count — `crawlingTwiceProducesTheSameURLCount`
+- [x] Interrupting a crawl and re-running against the same database resumes rather than restarting — `koda crawl <url> --resume`, covered by `rerunningAFinishedCrawlRefetchesNothing` and `inFlightURLsAreRequeuedOnTheNextRun`
+- [x] `KodaCore` imports neither AppKit nor SwiftUI — verify with `grep -rE 'import (AppKit|SwiftUI)' Sources/KodaCore` returning nothing
 
 ## Deliberately deferred
 
-Three spec items are not in M1. Each is deferred for a stated reason, not overlooked:
-
-**Frontier resume in the CLI.** Resume works at the store level (`resetInFlight`,
-exercised by tests), but the CLI deletes an existing database rather than
-offering to continue it. Wiring resume into a user-facing choice belongs with the
-app shell in M2.
+Two spec items are not in M1. Each is deferred for a stated reason, not overlooked:
 
 **Per-host concurrency cap.** `CrawlConfig.maxPerHost` exists but nothing enforces
 it, because in M1 nothing needs it: external URLs are recorded but never fetched,
@@ -3287,3 +3282,24 @@ lands, and must be implemented then.
 status and byte size. M1 records images and their alt text — enough for the
 missing-alt report — but does not fetch them. Size is only needed for the
 "images over 100KB" filter, which is an M3 report tab; the fetch lands with it.
+
+## Landed beyond the plan as written
+
+**Frontier resume in the CLI.** Originally deferred to M2, but the completion
+criteria required it and the store already supported it, so only the CLI's
+unconditional database delete stood in the way. `koda crawl <url> --resume`
+continues an existing database.
+
+**Crawl-delay is applied per request, not per batch.** The engine as planned
+claimed `workers` URLs, fetched them concurrently and slept once per batch, which
+is `workers` times faster than a `Crawl-delay` directive allows. When a delay is
+set the batch is serialised to one URL.
+
+**Canonical targets do not count as redirect hops.** Task 13 as written routed
+canonical links through the same resolver as redirect targets, so a canonical
+inherited `parent hops + 1`. With a low `maxRedirects` that recorded canonical
+targets as abandoned despite nothing ever having redirected to them.
+
+**`CrawlSummary.crawledURLs`.** Internal URL counts include assets that are
+recorded but never fetched, so without a separate crawled count the two headline
+numbers looked inconsistent for no visible reason.
