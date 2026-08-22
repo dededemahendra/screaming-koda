@@ -27,8 +27,9 @@ extension Store {
                     arguments: [
                         result.urlID, result.status, result.errorKind, result.contentType,
                         result.contentLength, result.responseTimeMs,
-                        try Self.resolveTarget(db, result.redirectTarget, parent: result,
-                                               config: config, seedHost: seedHost, now: now, discovered: &discovered),
+                        try Self.resolveRedirectTarget(db, result.redirectTarget, parent: result,
+                                                       config: config, seedHost: seedHost, now: now,
+                                                       discovered: &discovered),
                         now.timeIntervalSince1970, result.bodyGz,
                     ]
                 )
@@ -49,8 +50,9 @@ extension Store {
         seedHost: String?, now: Date, discovered: inout Int
     ) throws {
         let canonicalNormalized = facts.canonical.flatMap { URLNormalizer.normalize($0, relativeTo: result.url) }
-        let canonicalID = try Self.resolveTarget(db, canonicalNormalized, parent: result, config: config,
-                                                 seedHost: seedHost, now: now, discovered: &discovered)
+        let canonicalID = try Self.resolveCanonicalTarget(db, canonicalNormalized, parent: result,
+                                                          config: config, seedHost: seedHost, now: now,
+                                                          discovered: &discovered)
 
         try db.execute(
             sql: """
@@ -117,7 +119,27 @@ extension Store {
         }
     }
 
-    static func resolveTarget(
+    /// A redirect target inherits its parent's hop count plus one, and keeps the
+    /// parent's depth rather than descending a level: a redirect is the same page
+    /// at a new address, not a child of it, so a chain must not eat depth budget.
+    static func resolveRedirectTarget(
+        _ db: Database, _ target: NormalizedURL?, parent: CrawlResult, config: CrawlConfig,
+        seedHost: String?, now: Date, discovered: inout Int
+    ) throws -> Int64? {
+        guard let target else { return nil }
+        let parentHops = try Int.fetchOne(
+            db, sql: "SELECT redirect_hops FROM urls WHERE id = ?", arguments: [parent.urlID]
+        ) ?? 0
+        return try upsertURL(db, target, parentDepth: parent.depth - 1, config: config, seedHost: seedHost,
+                             now: now, enqueue: isInternal(target, seedHost: seedHost, config: config),
+                             discovered: &discovered, redirectHops: parentHops + 1)
+    }
+
+    /// A canonical link is a declaration about the current page, not a hop along a
+    /// redirect chain, so it starts a fresh hop count and is treated as an ordinary
+    /// child link. Charging it a hop would let a long chain silently suppress
+    /// canonical targets that were never redirected to at all.
+    static func resolveCanonicalTarget(
         _ db: Database, _ target: NormalizedURL?, parent: CrawlResult, config: CrawlConfig,
         seedHost: String?, now: Date, discovered: inout Int
     ) throws -> Int64? {
@@ -130,7 +152,8 @@ extension Store {
     /// Inserts the URL if unseen. `enqueue` false means the row is recorded as skipped rather than queued.
     static func upsertURL(
         _ db: Database, _ url: NormalizedURL, parentDepth: Int, config: CrawlConfig,
-        seedHost: String?, now: Date, enqueue: Bool, discovered: inout Int
+        seedHost: String?, now: Date, enqueue: Bool, discovered: inout Int,
+        redirectHops: Int = 0
     ) throws -> Int64 {
         if let existing = try Int64.fetchOne(db, sql: "SELECT id FROM urls WHERE url_hash = ?", arguments: [url.sha256]) {
             return existing
@@ -141,6 +164,10 @@ extension Store {
         var shouldQueue = enqueue
         if shouldQueue, let maxDepth = config.maxDepth, depth > maxDepth { shouldQueue = false }
         if shouldQueue, !passesFilters(url, config: config) { shouldQueue = false }
+        // URL dedup stops a redirect loop that revisits an address, but not a server
+        // that mints a fresh URL each hop. Without this the walk only ends at the
+        // 500k URL cap.
+        if shouldQueue, redirectHops > config.maxRedirects { shouldQueue = false }
         if shouldQueue {
             // Only rows that still count against crawl budget — queued, in-flight, or done.
             // Skipped rows (state 3) are external links, images, and filtered targets that
@@ -151,11 +178,11 @@ extension Store {
 
         try db.execute(
             sql: """
-                INSERT INTO urls (url, url_hash, host, path, depth, is_internal, discovered_at, state)
-                VALUES (?,?,?,?,?,?,?,?)
+                INSERT INTO urls (url, url_hash, host, path, depth, is_internal, discovered_at, state, redirect_hops)
+                VALUES (?,?,?,?,?,?,?,?,?)
                 """,
             arguments: [url.absoluteString, url.sha256, url.host, url.path, depth,
-                        internalFlag ? 1 : 0, now.timeIntervalSince1970, shouldQueue ? 0 : 3]
+                        internalFlag ? 1 : 0, now.timeIntervalSince1970, shouldQueue ? 0 : 3, redirectHops]
         )
         if shouldQueue { discovered += 1 }
         return db.lastInsertedRowID
