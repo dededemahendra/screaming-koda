@@ -34,6 +34,9 @@ struct Crawl: AsyncParsableCommand {
     @Flag(name: .long, help: "Ignore robots.txt. Use only on sites you control.")
     var ignoreRobots = false
 
+    @Flag(name: .long, help: "Continue an existing database instead of starting over.")
+    var resume = false
+
     mutating func run() async throws {
         var config = CrawlConfig(seedURL: url)
         config.workers = workers
@@ -45,11 +48,18 @@ struct Crawl: AsyncParsableCommand {
             throw ValidationError("Not a crawlable http(s) URL: \(url)")
         }
         let path = db ?? FileManager.default.currentDirectoryPath + "/\(host).koda"
-        if FileManager.default.fileExists(atPath: path) {
+        let existed = FileManager.default.fileExists(atPath: path)
+        if existed && !resume {
             try FileManager.default.removeItem(atPath: path)
         }
 
-        print("Crawling \(url) → \(path)")
+        // Resuming is safe because the frontier lives in SQLite: URLs already done
+        // are never reclaimed, and anything a crash left in-flight is requeued.
+        if resume && existed {
+            print("Resuming \(url) → \(path)")
+        } else {
+            print("Crawling \(url) → \(path)")
+        }
         if ignoreRobots { print("WARNING: ignoring robots.txt") }
 
         let started = Date()
@@ -57,13 +67,17 @@ struct Crawl: AsyncParsableCommand {
             dbPath: path, config: config,
             client: URLSessionHTTPClient(), parser: SwiftSoupParser(),
             onProgress: { progress in
+                // Padded so a shorter update fully overwrites a longer one; \r alone
+                // leaves the tail of the previous line on screen.
+                let text = "crawled \(progress.crawled)  queued \(progress.queued)  found \(progress.discovered)"
                 FileHandle.standardError.write(
-                    Data("\rcrawled \(progress.crawled)  queued \(progress.queued)".utf8)
+                    Data("\r\(text.padding(toLength: max(text.count, 60), withPad: " ", startingAt: 0))".utf8)
                 )
             }
         )
         let elapsed = Date().timeIntervalSince(started)
-        print("\n")
+        FileHandle.standardError.write(Data("\r\(String(repeating: " ", count: 60))\r".utf8))
+        print()
         Self.printSummary(try store.summary(), elapsed: elapsed)
     }
 
