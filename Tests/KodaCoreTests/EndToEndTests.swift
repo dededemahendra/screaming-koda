@@ -170,7 +170,7 @@ private func redirectServerScript() throws -> URL {
     #expect(robotsOutcome == .parsed)
     let summary = try store.summary()
 
-    #expect(summary.byStatusClass["2xx"] == 5, "index, about, dupe, latin1, rich")
+    #expect(summary.byStatusClass["2xx"] == 6, "index, about, dupe, latin1, rich, report.pdf")
     // missing.html (a real dead link) plus pic.png and noalt.png: checkImages now fetches
     // both <img> sources on index.html, and neither file exists on the fixture server, so
     // both genuinely 404. blocked/secret.html is not among these three because robots.txt
@@ -354,7 +354,7 @@ private func redirectServerScript() throws -> URL {
     #expect(detail.value("Indexability") == Indexability.indexable)
 
     let outlinks = try store.outlinks(id: homeID)
-    #expect(outlinks.total == 6, "about, dupe, missing, blocked, latin1, rich")
+    #expect(outlinks.total == 7, "about, dupe, missing, blocked, latin1, rich, report.pdf")
     #expect(outlinks.items.contains { $0.url.hasSuffix("/missing.html") && $0.status == 404 },
             "a broken outbound link is what this pane exists to show")
 
@@ -443,4 +443,32 @@ private func redirectServerScript() throws -> URL {
     }
     #expect(extras?["w"] == 320)
     #expect((extras?["h"] as String?)?.lowercased().contains("content-type") == true)
+}
+
+/// A PDF linked from a real page, fetched over real HTTP, must land in the
+/// database with its own title rather than as an untitled binary.
+@Test func aLinkedPDFIsCrawledAndTitled() async throws {
+    let server = try FixtureServer(directory: try fixtureDirectory())
+    defer { server.stop() }
+    try await server.waitUntilReady()
+
+    var config = CrawlConfig(seedURL: "http://127.0.0.1:\(server.port)/index.html")
+    config.workers = 3
+    let (store, _) = try await CrawlSession.start(
+        dbPath: nil, config: config,
+        client: URLSessionHTTPClient(), parser: SwiftSoupParser(), onProgress: nil)
+
+    let row = try await store.dbQueue.read { db in
+        try Row.fetchOne(db, sql: """
+            SELECT f.title, f.meta_description, f.word_count, r.status, r.content_type
+            FROM urls u
+            JOIN responses r ON r.url_id = u.id
+            LEFT JOIN page_facts f ON f.url_id = u.id
+            WHERE u.path = '/report.pdf'
+            """)
+    }
+    #expect(row?["status"] == 200)
+    #expect(row?["title"] == "The Fixture Report")
+    #expect(row?["meta_description"] == "A PDF served by the fixture site")
+    #expect((row?["word_count"] as Int? ?? 0) > 0)
 }

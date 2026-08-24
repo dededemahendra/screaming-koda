@@ -257,7 +257,16 @@ public actor CrawlEngine {
             var bodyGz: Data?
             let isHTML = response.contentType?.contains("html") == true
 
-            if isHTML, let body = response.body, !body.isEmpty {
+            if !isHTML, let body = response.body, !body.isEmpty,
+               PDFFacts.isPDF(contentType: response.contentType, body: body) {
+                // A PDF is a page a search engine indexes, so it gets the same
+                // title and word-count treatment rather than being recorded as
+                // an untitled binary. Its links are not followed: extracting
+                // them is a separate feature, and guessing would be worse than
+                // not doing it.
+                facts = PDFFacts.parse(body)
+                if retainBodies { bodyGz = Gzip.compress(body) }
+            } else if isHTML, let body = response.body, !body.isEmpty {
                 // Not a bare UTF-8 decode: a Windows-1252 page decoded as UTF-8
                 // yields a mangled title, which the Titles report would then
                 // present as a real finding. See TextDecoding.

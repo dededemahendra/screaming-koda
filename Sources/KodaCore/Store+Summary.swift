@@ -16,6 +16,15 @@ public struct CrawlSummary: Sendable {
 }
 
 extension Store {
+    /// Page-quality counts apply to HTML only, and must, for two reasons.
+    ///
+    /// Since PDFs are parsed, they get a `page_facts` row — and a PDF has no H1
+    /// by definition, so counting it as "missing H1" invents a finding. It also
+    /// keeps this summary in step with the Titles, Meta Description and Headings
+    /// reports, which are all based on `Reports.htmlPage`. A test asserts the two
+    /// agree; that test is only worth anything if they are defined the same way.
+    static let htmlOnly = "coalesce(r.content_type, '') LIKE 'text/html%'"
+
     public func summary() throws -> CrawlSummary {
         try dbQueue.read { db in
             func count(_ sql: String) throws -> Int {
@@ -41,7 +50,7 @@ extension Store {
                 transportErrors: try count("SELECT count(*) FROM responses WHERE status = 0"),
                 missingTitles: try count("""
                     SELECT count(*) FROM page_facts f JOIN responses r ON r.url_id = f.url_id
-                    WHERE (f.title IS NULL OR f.title = '') AND r.status = 200
+                    WHERE (f.title IS NULL OR f.title = '') AND r.status = 200 AND \(Self.htmlOnly)
                     """),
                 // Must match the sibling queries above and stay restricted to status = 200:
                 // `CrawlEngine.process` writes a `page_facts` row for ANY status as long as
@@ -53,16 +62,17 @@ extension Store {
                     SELECT coalesce(sum(n), 0) FROM (
                       SELECT count(*) AS n FROM page_facts f JOIN responses r ON r.url_id = f.url_id
                       WHERE f.title IS NOT NULL AND f.title != '' AND r.status = 200
+                        AND \(Self.htmlOnly)
                       GROUP BY f.title HAVING count(*) > 1
                     )
                     """),
                 missingDescriptions: try count("""
                     SELECT count(*) FROM page_facts f JOIN responses r ON r.url_id = f.url_id
-                    WHERE (f.meta_description IS NULL OR f.meta_description = '') AND r.status = 200
+                    WHERE (f.meta_description IS NULL OR f.meta_description = '') AND r.status = 200 AND \(Self.htmlOnly)
                     """),
                 missingH1: try count("""
                     SELECT count(*) FROM page_facts f JOIN responses r ON r.url_id = f.url_id
-                    WHERE (f.h1 IS NULL OR f.h1 = '') AND r.status = 200
+                    WHERE (f.h1 IS NULL OR f.h1 = '') AND r.status = 200 AND \(Self.htmlOnly)
                     """),
                 imagesMissingAlt: try count("SELECT count(*) FROM images WHERE alt IS NULL OR alt = ''"),
                 maxDepth: try count("SELECT coalesce(max(u.depth), 0) FROM urls u JOIN responses r ON r.url_id = u.id")
