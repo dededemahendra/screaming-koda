@@ -9,7 +9,7 @@ struct Koda: AsyncParsableCommand {
         commandName: "koda",
         abstract: "Crawl a site and report on it.",
         version: KodaCoreInfo.versionString,
-        subcommands: [Crawl.self, Export.self],
+        subcommands: [Crawl.self, Export.self, Compare.self],
         defaultSubcommand: Crawl.self
     )
 }
@@ -316,6 +316,77 @@ struct Export: AsyncParsableCommand {
 
         for export in exports {
             Crawl.logLine("  \(export.name): \(export.rows.count) rows")
+        }
+    }
+}
+
+
+struct Compare: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Compare a crawl against an earlier one.")
+
+    @Argument(help: "The current crawl.")
+    var current: String
+
+    @Argument(help: "The earlier crawl to compare it against.")
+    var previous: String
+
+    @Option(name: .long, help: "How many of each kind of change to list.")
+    var limit: Int = 500
+
+    @Flag(name: .long, help: "Write the changes as CSV to stdout instead of a summary.")
+    var csv = false
+
+    mutating func run() async throws {
+        guard FileManager.default.fileExists(atPath: current) else {
+            throw ValidationError("No crawl database at \(current)")
+        }
+        let store = try Store(path: current)
+        try store.migrate()
+        let diff = try store.compare(against: previous, limit: limit)
+
+        if csv {
+            let export = ReportExport(
+                name: "Changes",
+                headers: ["URL", "Field", "Before", "After"],
+                rows: diff.changes.map { [$0.url, $0.field, $0.before, $0.after] }
+                    + diff.added.map { [$0, "Added", nil, nil] }
+                    + diff.removed.map { [$0, "Removed", nil, nil] })
+            FileHandle.standardOutput.write(CSVWriter.encode(export, includeBOM: false))
+            return
+        }
+
+        Crawl.logLine("Comparing \(current)")
+        Crawl.logLine("     against \(previous)")
+        Crawl.logLine("")
+        if diff.isEmpty {
+            Crawl.logLine("No differences.")
+            return
+        }
+        Crawl.logLine("  Added    \(diff.addedTotal)")
+        Crawl.logLine("  Removed  \(diff.removedTotal)")
+        Crawl.logLine("  Changed  \(diff.changesTotal)")
+        Crawl.logLine("")
+
+        // Grouped by field, because "eleven titles changed" is the shape of the
+        // answer people want before any individual URL is.
+        let byField = Dictionary(grouping: diff.changes, by: \.field)
+        for field in byField.keys.sorted() {
+            Crawl.logLine("\(field): \(byField[field]?.count ?? 0)")
+            for change in (byField[field] ?? []).prefix(5) {
+                Crawl.logLine("  \(change.url)")
+                Crawl.logLine("    was: \(change.before ?? "—")")
+                Crawl.logLine("    now: \(change.after ?? "—")")
+            }
+            if (byField[field]?.count ?? 0) > 5 { Crawl.logLine("  …") }
+        }
+        for (label, list, total) in [("Added", diff.added, diff.addedTotal),
+                                     ("Removed", diff.removed, diff.removedTotal)]
+        where total > 0 {
+            Crawl.logLine("")
+            Crawl.logLine("\(label): \(total)")
+            for url in list.prefix(10) { Crawl.logLine("  \(url)") }
+            if total > 10 { Crawl.logLine("  …") }
         }
     }
 }
