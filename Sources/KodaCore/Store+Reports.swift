@@ -24,8 +24,10 @@ extension Store {
     public func ids(for report: Report, filter: ReportFilter,
                     sortBy: ReportColumn?, ascending: Bool) throws -> [Int64] {
         try dbQueue.read { db in
-            try Int64.fetchAll(db, sql: Self.idsSQL(report: report, filter: filter,
-                                                    sortBy: sortBy, ascending: ascending))
+            try Int64.fetchAll(db,
+                sql: Self.idsSQL(report: report, filter: filter,
+                                 sortBy: sortBy, ascending: ascending),
+                arguments: StatementArguments(filter.arguments))
         }
     }
 

@@ -11,7 +11,8 @@ extension Store {
         let pairs = reports.flatMap { report in
             report.filters.map { filter in
                 (key: "\(report.id).\(filter.id)",
-                 sql: "(\(report.predicate)) AND (\(filter.predicate))")
+                 sql: "(\(report.predicate)) AND (\(filter.predicate))",
+                 arguments: filter.arguments)
             }
         }
         guard !pairs.isEmpty else { return [:] }
@@ -28,7 +29,11 @@ extension Store {
                 let selected = slice.enumerated()
                     .map { "coalesce(sum(CASE WHEN \($1.sql) THEN 1 ELSE 0 END), 0) AS n\($0)" }
                     .joined(separator: ", ")
-                guard let row = try Row.fetchOne(db, sql: "SELECT \(selected) \(ReportSQL.from)")
+                // Arguments concatenate in the order their predicates appear in
+                // the SELECT, which is the order the placeholders are bound in.
+                let arguments = slice.flatMap(\.arguments)
+                guard let row = try Row.fetchOne(db, sql: "SELECT \(selected) \(ReportSQL.from)",
+                                                 arguments: StatementArguments(arguments))
                 else { continue }
                 for (offset, pair) in slice.enumerated() {
                     out[pair.key] = row["n\(offset)"] ?? 0

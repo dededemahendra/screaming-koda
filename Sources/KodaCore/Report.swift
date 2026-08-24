@@ -37,15 +37,23 @@ public struct ReportFilter: Sendable, Identifiable, Equatable {
     public let id: String
     public let name: String
     /// ANDed with the report's own predicate. `"1"` for an unfiltered view.
+    ///
+    /// Built-in filters are compile-time constants. A user-defined one carries
+    /// `?` placeholders and supplies `arguments` for them, so nothing a person
+    /// typed is ever interpolated into SQL.
     public let predicate: String
+    /// Values bound to the placeholders in `predicate`, in order.
+    public let arguments: [String]
     /// Whether this filter describes a problem. The sidebar surfaces counts for
     /// issue filters; "All" is a navigation aid, not a finding.
     public let isIssue: Bool
 
-    public init(id: String, name: String, predicate: String, isIssue: Bool = false) {
+    public init(id: String, name: String, predicate: String,
+                arguments: [String] = [], isIssue: Bool = false) {
         self.id = id
         self.name = name
         self.predicate = predicate
+        self.arguments = arguments
         self.isIssue = isIssue
     }
 }

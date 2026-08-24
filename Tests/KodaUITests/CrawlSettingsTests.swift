@@ -173,3 +173,56 @@ private struct CountingClient: HTTPClient {
     c.config.checkImages = false
     #expect(CrawlSettings(defaults: defaults).config.checkImages == false)
 }
+
+// MARK: - Custom reports
+
+@MainActor
+@Test func customReportsRoundTripThroughSettings() {
+    let name = "koda.test.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: name)!
+    defer { UserDefaults.standard.removePersistentDomain(forName: name) }
+
+    let settings = CrawlSettings(defaults: defaults)
+    #expect(settings.customReports.isEmpty)
+
+    settings.customReports = [CustomReport(id: "one", name: "Thin pages", conditions: [
+        CustomCondition(field: "wordCount", comparison: .lessThan, value: "200")])]
+    #expect(CrawlSettings(defaults: defaults).customReports.first?.name == "Thin pages")
+}
+
+/// A custom report becomes a real tab, sitting after the built-in ones.
+@MainActor
+@Test func aCustomReportBecomesATabOnTheController() {
+    let name = "koda.test.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: name)!
+    defer { UserDefaults.standard.removePersistentDomain(forName: name) }
+
+    let settings = CrawlSettings(defaults: defaults)
+    settings.customReports = [CustomReport(id: "one", name: "Thin pages", conditions: [
+        CustomCondition(field: "wordCount", comparison: .lessThan, value: "200")])]
+
+    let c = CrawlController(client: CountingClient(), parser: SwiftSoupParser(),
+                            dbPath: nil, settings: settings)
+    #expect(c.availableReports.count == Reports.all.count + 1)
+    #expect(c.availableReports.last?.name == "Thin pages")
+
+    c.select(reportID: "custom_one")
+    #expect(c.selectedReport.name == "Thin pages")
+}
+
+/// A definition that compiles to nothing is left out rather than shown as an
+/// empty tab that looks like a working filter finding nothing.
+@MainActor
+@Test func anUnusableCustomReportIsNotShownAsATab() {
+    let name = "koda.test.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: name)!
+    defer { UserDefaults.standard.removePersistentDomain(forName: name) }
+
+    let settings = CrawlSettings(defaults: defaults)
+    settings.customReports = [CustomReport(id: "broken", name: "Broken", conditions: [
+        CustomCondition(field: "nonexistent", comparison: .equals, value: "x")])]
+
+    let c = CrawlController(client: CountingClient(), parser: SwiftSoupParser(),
+                            dbPath: nil, settings: settings)
+    #expect(c.availableReports.count == Reports.all.count)
+}

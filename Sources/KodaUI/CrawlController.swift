@@ -79,8 +79,15 @@ public final class CrawlController {
     public private(set) var images: InspectorRows<ImageRow>?
     public private(set) var redirectChain: [RedirectHop] = []
 
+    /// Every tab: the built-in reports followed by any custom ones that
+    /// compiled. A definition that produced nothing usable is left out rather
+    /// than shown as an empty tab.
+    public var availableReports: [Report] {
+        Reports.all + (settings?.customReports ?? []).compactMap(CustomReports.compile)
+    }
+
     public var selectedReport: Report {
-        Reports.all.first { $0.id == selectedReportID } ?? Reports.internalURLs
+        availableReports.first { $0.id == selectedReportID } ?? Reports.internalURLs
     }
 
     public var selectedFilter: ReportFilter {
@@ -351,7 +358,7 @@ public final class CrawlController {
     /// inspector at an unrelated URL. An unknown id is ignored rather than
     /// crashing — the sidebar is the only caller, but it is a public entry point.
     public func select(reportID: String, filterID: String? = nil) {
-        guard let report = Reports.all.first(where: { $0.id == reportID }) else { return }
+        guard let report = availableReports.first(where: { $0.id == reportID }) else { return }
         let filter = filterID.flatMap { id in report.filters.first { $0.id == id } }
             ?? report.defaultFilter
         selectedReportID = report.id
@@ -377,7 +384,7 @@ public final class CrawlController {
 
     public func exportEverything() throws -> [ReportExport] {
         guard let store else { return [] }
-        return try store.exportAll()
+        return try store.exportAll(reports: availableReports)
     }
 
     /// Whether there is anything to export yet.
@@ -415,7 +422,7 @@ public final class CrawlController {
         lastCountsRefresh = now
         // A failed read keeps the previous counts rather than blanking the
         // sidebar: the same rule the row index follows.
-        if let fresh = try? store.counts(for: Reports.all) { counts = fresh }
+        if let fresh = try? store.counts(for: availableReports) { counts = fresh }
     }
 
     /// A crawl that fetched nothing because robots.txt disallowed it looks

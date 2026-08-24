@@ -38,7 +38,8 @@ public struct ContentView: View {
                 Divider()
             }
             HSplitView {
-                SidebarView(counts: controller.counts,
+                SidebarView(reports: controller.availableReports,
+                            counts: controller.counts,
                             selectedReportID: controller.selectedReportID,
                             selectedFilterID: controller.selectedFilterID,
                             onSelect: { report, filter in

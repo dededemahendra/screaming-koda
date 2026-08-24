@@ -9,6 +9,7 @@ import KodaCore
 /// toolbar.
 public final class CrawlSettings: @unchecked Sendable {
     static let key = "crawlConfig"
+    static let customReportsKey = "customReports"
     private let defaults: UserDefaults
 
     /// - Parameter defaults: injectable so tests never touch the real domain.
@@ -32,6 +33,22 @@ public final class CrawlSettings: @unchecked Sendable {
             stored.seedURL = ""
             guard let data = try? JSONEncoder().encode(stored) else { return }
             defaults.set(data, forKey: Self.key)
+        }
+    }
+
+    /// Reports the user defined. Stored beside the crawl config rather than in
+    /// the `.koda` file: a report definition belongs to the person, and applies
+    /// to every crawl they run.
+    public var customReports: [CustomReport] {
+        get {
+            guard let data = defaults.data(forKey: Self.customReportsKey),
+                  let decoded = try? JSONDecoder().decode([CustomReport].self, from: data)
+            else { return [] }
+            return decoded
+        }
+        set {
+            guard let data = try? JSONEncoder().encode(newValue) else { return }
+            defaults.set(data, forKey: Self.customReportsKey)
         }
     }
 

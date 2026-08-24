@@ -8,13 +8,16 @@ import SwiftUI
 /// is far harder to scan than a stable one, and "we checked, it's clean" is
 /// itself worth showing.
 public struct SidebarView: View {
+    private let reports: [Report]
     private let counts: [String: Int]
     private let selectedReportID: String
     private let selectedFilterID: String
     private let onSelect: (String, String) -> Void
 
-    public init(counts: [String: Int], selectedReportID: String, selectedFilterID: String,
+    public init(reports: [Report] = Reports.all, counts: [String: Int],
+                selectedReportID: String, selectedFilterID: String,
                 onSelect: @escaping (String, String) -> Void) {
+        self.reports = reports
         self.counts = counts
         self.selectedReportID = selectedReportID
         self.selectedFilterID = selectedFilterID
@@ -23,7 +26,7 @@ public struct SidebarView: View {
 
     public var body: some View {
         List {
-            ForEach(Reports.all) { report in
+            ForEach(reports) { report in
                 Section {
                     ForEach(report.filters) { filter in
                         row(report, filter)
