@@ -1,5 +1,34 @@
 import Foundation
 
+/// Where and how to log in before crawling.
+public struct FormLogin: Codable, Sendable, Equatable {
+    public var url: String
+    /// CSS selectors for the fields and the button. Defaults cover the common
+    /// shape — `input[type=password]` is a far more reliable way to find a
+    /// password box than guessing at its name.
+    public var usernameSelector: String
+    public var passwordSelector: String
+    public var submitSelector: String
+    public var username: String
+    public var password: String
+    /// How long to wait after submitting before reading the session back.
+    public var settleMs: Int
+
+    public init(url: String, username: String, password: String,
+                usernameSelector: String = "input[type=email], input[type=text], input[name*=user]",
+                passwordSelector: String = "input[type=password]",
+                submitSelector: String = "button[type=submit], input[type=submit], button",
+                settleMs: Int = 2000) {
+        self.url = url
+        self.username = username
+        self.password = password
+        self.usernameSelector = usernameSelector
+        self.passwordSelector = passwordSelector
+        self.submitSelector = submitSelector
+        self.settleMs = settleMs
+    }
+}
+
 /// One named CSS-selector extraction.
 public struct ExtractionRule: Codable, Sendable, Equatable, Identifiable {
     public var name: String
@@ -135,6 +164,15 @@ public struct CrawlConfig: Codable, Sendable {
     /// Extra request headers, for token auth, a staging bypass header, or
     /// anything else a protected environment needs.
     public var extraHeaders: [String: String] = [:]
+
+    /// A form login, performed in a real browser before the crawl starts.
+    ///
+    /// Basic auth is a header; a form login is a page, a POST, a redirect and a
+    /// session cookie, and reproducing that by hand means guessing at CSRF
+    /// tokens and hidden fields. Driving the actual login page in a browser
+    /// avoids all of that guessing — which is only possible because rendering
+    /// already exists.
+    public var login: FormLogin?
 
     /// Whether any authentication is configured at all.
     public var hasCredentials: Bool {

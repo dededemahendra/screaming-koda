@@ -73,6 +73,23 @@ public enum RenderFailure: Error, Sendable, Equatable {
 /// needs WebKit, which needs a UI framework and a main-thread run loop, and
 /// `KodaCore`'s defining property is that it builds and tests headless. The
 /// implementation lives in `KodaRender` and is injected.
+/// What a login attempt produced.
+public struct LoginResult: Sendable, Equatable {
+    /// A `Cookie` header value carrying the session, for the crawler's own
+    /// requests. The renderer keeps its cookies itself; the fetcher cannot.
+    public let cookieHeader: String
+    /// Where the browser ended up. A login that stayed on the login page is the
+    /// usual sign it failed, and the caller can say so.
+    public let finalURL: String
+    public let cookieNames: [String]
+
+    public init(cookieHeader: String, finalURL: String, cookieNames: [String]) {
+        self.cookieHeader = cookieHeader
+        self.finalURL = finalURL
+        self.cookieNames = cookieNames
+    }
+}
+
 public protocol PageRenderer: Sendable {
     func render(url: String, timeout: TimeInterval, settleMs: Int) async throws -> RenderedPage
 
@@ -81,11 +98,20 @@ public protocol PageRenderer: Sendable {
     /// scripts still satisfies the protocol.
     func render(url: String, timeout: TimeInterval, settleMs: Int,
                 scripts: [ExtractionRule]) async throws -> RenderedPage
+
+    /// Drives a login form and hands back the resulting session.
+    func logIn(_ login: FormLogin, timeout: TimeInterval) async throws -> LoginResult
 }
 
 extension PageRenderer {
     public func render(url: String, timeout: TimeInterval, settleMs: Int,
                        scripts: [ExtractionRule]) async throws -> RenderedPage {
         try await render(url: url, timeout: timeout, settleMs: settleMs)
+    }
+
+    /// A renderer that cannot drive a form says so rather than pretending the
+    /// login worked and letting the crawl fail one page at a time.
+    public func logIn(_ login: FormLogin, timeout: TimeInterval) async throws -> LoginResult {
+        throw RenderFailure.scriptFailed("this renderer cannot perform a form login")
     }
 }

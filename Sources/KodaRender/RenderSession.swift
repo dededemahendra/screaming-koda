@@ -11,7 +11,7 @@ import WebKit
 /// the order pages happened to be visited in.
 @MainActor
 final class RenderSession: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
-    private let webView: WKWebView
+    let webView: WKWebView
     private var errors: [String] = []
     private var finished = false
     /// Whether an HTTP response actually arrived.
@@ -95,7 +95,8 @@ final class RenderSession: NSObject, WKNavigationDelegate, WKScriptMessageHandle
     static let mobileViewport = CGSize(width: 390, height: 844)
     static let desktopViewport = CGSize(width: 1440, height: 900)
 
-    private init(viewport: CGSize = RenderSession.desktopViewport, userAgent: String? = nil) {
+    private init(viewport: CGSize = RenderSession.desktopViewport, userAgent: String? = nil,
+                 dataStore: WKWebsiteDataStore? = nil) {
         let controller = WKUserContentController()
         controller.addUserScript(WKUserScript(source: Self.errorCapture,
                                               injectionTime: .atDocumentStart,
@@ -103,6 +104,14 @@ final class RenderSession: NSObject, WKNavigationDelegate, WKScriptMessageHandle
         let configuration = WKWebViewConfiguration()
         configuration.userContentController = controller
         configuration.suppressesIncrementalRendering = true
+        // Cookies belong to one crawl, not to the machine.
+        //
+        // WKWebView defaults to the shared persistent store, which means a login
+        // during one crawl would still be present when crawling a different site
+        // later, and across app launches. A renderer owns a non-persistent store
+        // and hands it to every page it renders, so a session lasts exactly as
+        // long as the crawl that established it.
+        if let dataStore { configuration.websiteDataStore = dataStore }
         // A real viewport: a zero-sized view makes some frameworks skip
         // rendering entirely.
         webView = WKWebView(frame: CGRect(origin: .zero, size: viewport),
@@ -115,9 +124,10 @@ final class RenderSession: NSObject, WKNavigationDelegate, WKScriptMessageHandle
 
     static func run(url: String, timeout: TimeInterval, settleMs: Int,
                     scripts: [ExtractionRule] = [], mobile: Bool = false,
-                    userAgent: String? = nil) async throws -> RenderedPage {
+                    userAgent: String? = nil,
+                    dataStore: WKWebsiteDataStore? = nil) async throws -> RenderedPage {
         let session = RenderSession(viewport: mobile ? mobileViewport : desktopViewport,
-                                    userAgent: userAgent)
+                                    userAgent: userAgent, dataStore: dataStore)
         return try await session.load(url: url, timeout: timeout, settleMs: settleMs,
                                       scripts: scripts)
     }
@@ -248,5 +258,69 @@ final class RenderSession: NSObject, WKNavigationDelegate, WKScriptMessageHandle
                  withError error: Error) {
         failure = .navigationFailed(error.localizedDescription)
         finish()
+    }
+}
+
+// MARK: - Form login
+
+@MainActor
+extension RenderSession {
+    /// Loads the login page, fills the form, submits it, and reads back the
+    /// session cookies.
+    ///
+    /// The fields are found and filled with real DOM events dispatched after
+    /// each assignment. Setting `.value` alone is not enough on a modern login
+    /// page: React and friends track input through change events, and a form
+    /// whose framework never saw the value submits empty — which looks exactly
+    /// like wrong credentials.
+    static func logIn(_ login: FormLogin, timeout: TimeInterval,
+                      dataStore: WKWebsiteDataStore? = nil) async throws -> LoginResult {
+        let session = RenderSession(dataStore: dataStore)
+        _ = try await session.load(url: login.url, timeout: timeout,
+                                   settleMs: 300, scripts: [])
+
+        let fill = """
+            (function () {
+              function set(selector, value) {
+                var el = document.querySelector(selector);
+                if (!el) { return false; }
+                var setter = Object.getOwnPropertyDescriptor(
+                  window.HTMLInputElement.prototype, 'value').set;
+                setter.call(el, value);
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+              }
+              var okUser = set(\(jsLiteral(login.usernameSelector)), \(jsLiteral(login.username)));
+              var okPass = set(\(jsLiteral(login.passwordSelector)), \(jsLiteral(login.password)));
+              if (!okUser || !okPass) { return 'fields-not-found'; }
+              var button = document.querySelector(\(jsLiteral(login.submitSelector)));
+              if (button) { button.click(); return 'submitted'; }
+              var form = document.querySelector('form');
+              if (form) { form.submit(); return 'submitted-form'; }
+              return 'no-submit';
+            })();
+            """
+        let outcome = (try? await session.webView.evaluateJavaScript(fill)) as? String ?? "failed"
+        guard outcome.hasPrefix("submitted") else {
+            throw RenderFailure.scriptFailed("could not complete the login form: \(outcome)")
+        }
+
+        try? await Task.sleep(nanoseconds: UInt64(max(login.settleMs, 0)) * 1_000_000)
+
+        let cookies = await session.webView.configuration.websiteDataStore
+            .httpCookieStore.allCookies()
+        let host = URL(string: login.url)?.host ?? ""
+        // Only cookies for the site being crawled: sending a third-party
+        // analytics cookie along with every request would be both useless and
+        // a small privacy leak.
+        let relevant = cookies.filter { host.hasSuffix($0.domain.hasPrefix(".")
+            ? String($0.domain.dropFirst()) : $0.domain) }
+        let header = relevant.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
+        let final = (try? await session.webView.evaluateJavaScript("location.href")) as? String
+
+        return LoginResult(cookieHeader: header,
+                           finalURL: final ?? login.url,
+                           cookieNames: relevant.map(\.name).sorted())
     }
 }

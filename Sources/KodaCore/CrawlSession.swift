@@ -185,6 +185,19 @@ public enum CrawlSession {
                                          discoveredAt: now)
         }
 
+        // Log in before anything is fetched, including robots.txt: a site
+        // behind a login serves the login page for every URL until there is a
+        // session, and a robots.txt that came back as a login form would be
+        // parsed as "disallow nothing" or "disallow everything" depending on
+        // its markup — either way, a lie.
+        var config = config
+        if let login = config.login, let renderer {
+            if let result = try? await renderer.logIn(login, timeout: config.renderTimeout),
+               !result.cookieHeader.isEmpty {
+                config.extraHeaders["Cookie"] = result.cookieHeader
+            }
+        }
+
         // Robots first: its `Sitemap:` directives are one of the two sources of
         // sitemaps, and its rules govern whether they may be crawled at all.
         let (robots, outcome) = await fetchRobots(for: seed, client: client, config: config)

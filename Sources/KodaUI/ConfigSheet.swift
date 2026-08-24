@@ -140,6 +140,29 @@ public struct ConfigSheet: View {
                     }
                     Text("One per line, as Name: Value.")
                         .font(.caption).foregroundStyle(.secondary)
+
+                    Toggle("Log in through a form", isOn: Binding(
+                        get: { draft.login != nil },
+                        set: { on in
+                            draft.login = on
+                                ? (draft.login ?? FormLogin(url: "", username: "", password: ""))
+                                : nil
+                        }))
+                    if draft.login != nil {
+                        TextField("Login page URL", text: Binding(
+                            get: { draft.login?.url ?? "" },
+                            set: { draft.login?.url = $0 }))
+                        TextField("Form username", text: Binding(
+                            get: { draft.login?.username ?? "" },
+                            set: { draft.login?.username = $0 }))
+                        SecureField("Form password", text: Binding(
+                            get: { draft.login?.password ?? "" },
+                            set: { draft.login?.password = $0 }))
+                        Text("Needs rendering switched on: a form login is a page, and driving "
+                             + "it needs a browser.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 Section("JavaScript rendering") {
                     Toggle("Render pages in a browser engine", isOn: $draft.renderJavaScript)

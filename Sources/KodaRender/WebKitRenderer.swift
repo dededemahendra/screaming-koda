@@ -32,6 +32,20 @@ public actor WebKitRenderer: PageRenderer {
 
     /// Bounds concurrency without a semaphore type: each render waits for a slot
     /// by suspending on a continuation held here in the actor.
+    /// One non-persistent cookie jar per renderer, so a session established by a
+    /// form login carries across every page of that crawl and no further.
+    private var dataStore: WKWebsiteDataStore?
+
+    @MainActor
+    private static func makeDataStore() -> WKWebsiteDataStore { .nonPersistent() }
+
+    private func store() async -> WKWebsiteDataStore {
+        if let dataStore { return dataStore }
+        let fresh = await Self.makeDataStore()
+        dataStore = fresh
+        return fresh
+    }
+
     private var active = 0
     private var waiting: [CheckedContinuation<Void, Never>] = []
 
@@ -51,12 +65,20 @@ public actor WebKitRenderer: PageRenderer {
         try await render(url: url, timeout: timeout, settleMs: settleMs, scripts: [])
     }
 
+    public func logIn(_ login: FormLogin, timeout: TimeInterval = 30) async throws -> LoginResult {
+        let jar = await store()
+        await acquire()
+        defer { release() }
+        return try await RenderSession.logIn(login, timeout: timeout, dataStore: jar)
+    }
+
     public func render(url: String, timeout: TimeInterval, settleMs: Int,
                        scripts: [ExtractionRule]) async throws -> RenderedPage {
+        let jar = await store()
         await acquire()
         defer { release() }
         return try await RenderSession.run(url: url, timeout: timeout, settleMs: settleMs,
                                            scripts: scripts, mobile: mobile,
-                                           userAgent: userAgent)
+                                           userAgent: userAgent, dataStore: jar)
     }
 }

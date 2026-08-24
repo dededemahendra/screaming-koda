@@ -53,6 +53,9 @@ struct Crawl: AsyncParsableCommand {
     @Option(name: .long, help: "HTTP Basic password.")
     var password: String?
 
+    @Option(name: .long, help: "Log in at this URL before crawling. Needs --render.")
+    var loginURL: String?
+
     @Option(name: .long, help: "Extra request header as Name:Value. Repeatable.")
     var header: [String] = []
 
@@ -122,8 +125,22 @@ struct Crawl: AsyncParsableCommand {
         if !config.javaScriptExtractions.isEmpty && !render {
             throw ValidationError("--js needs --render: there is no rendered DOM to evaluate against.")
         }
-        config.basicAuthUser = user ?? ""
-        config.basicAuthPassword = password ?? ""
+        if let loginURL {
+            guard render else {
+                throw ValidationError("--login-url needs --render: a form login is a page, "
+                    + "and driving it needs a browser.")
+            }
+            guard let user, let password else {
+                throw ValidationError("--login-url needs --user and --password.")
+            }
+            config.login = FormLogin(url: loginURL, username: user, password: password)
+            // The credentials are for the form, not for Basic auth; sending them
+            // as an Authorization header as well would be wrong.
+            config.basicAuthUser = ""
+            config.basicAuthPassword = ""
+        }
+        config.basicAuthUser = config.login == nil ? (user ?? "") : ""
+        config.basicAuthPassword = config.login == nil ? (password ?? "") : ""
         for entry in header {
             // Split on the first colon only: header values legitimately contain
             // colons, as any URL-valued header does.
