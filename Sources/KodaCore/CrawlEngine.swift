@@ -292,14 +292,22 @@ public actor CrawlEngine {
                     // the rest of the crawler follows: never die from a bad page.
                     if let rendered = try? await renderer.render(
                         url: item.url.absoluteString,
-                        timeout: config.renderTimeout, settleMs: config.renderSettleMs),
+                        timeout: config.renderTimeout, settleMs: config.renderSettleMs,
+                        scripts: config.javaScriptExtractions),
                        let renderedFacts = try? parser.parse(html: rendered.html,
                                                              extractions: config.extractions) {
                         render = RenderOutcome(elapsedMs: rendered.elapsedMs,
                                                errors: rendered.errors,
                                                renderedWords: renderedFacts.wordCount,
                                                staticWords: facts?.wordCount ?? 0)
-                        facts = renderedFacts
+                        var merged = renderedFacts
+                        // JavaScript results join the CSS-selector extractions,
+                        // so both kinds land in the same tab and the same export.
+                        for (name, value) in rendered.scriptResults.sorted(by: { $0.key < $1.key }) {
+                            merged.extractions.append(
+                                ExtractionFact(name: name, value: value, position: 0))
+                        }
+                        facts = merged
                         if retainBodies { bodyGz = Gzip.compress(Data(rendered.html.utf8)) }
                     }
                 }

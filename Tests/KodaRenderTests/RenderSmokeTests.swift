@@ -312,3 +312,105 @@ private struct AlwaysFailingRenderer: PageRenderer {
     }
     #expect(errors?.contains("a deliberate console error") == true)
 }
+
+// MARK: - Custom JavaScript extraction
+
+/// The charset declaration is load-bearing, not decoration. Without it — and
+/// python's http.server sends no charset for .html — WebKit falls back to a
+/// legacy encoding exactly as any browser does, and renders "£" as "Â£". The
+/// static decoder tries UTF-8 first and gets it right, so the two paths
+/// genuinely disagree on an undeclared page. The browser is the authority for a
+/// rendered page, and real pages declare their encoding.
+private let dataPage = """
+    <!doctype html><html><head><meta charset="utf-8"><title>Data</title></head>
+    <body><div id="price" data-cents="4999">£49.99</div>
+    <script>window.__STOCK__ = 17; window.__SKU__ = 'ACME-1';</script>
+    </body></html>
+    """
+
+/// The thing CSS selectors cannot reach: a value that exists only as a
+/// JavaScript variable, never in the DOM.
+@Test func aJavaScriptSnippetCanExtractAValueThatIsNotInTheDOM() async throws {
+    let server = try TinyServer(pages: ["data.html": dataPage])
+    defer { server.stop() }
+    try await server.waitUntilReady()
+
+    let page = try await WebKitRenderer(poolSize: 1).render(
+        url: server.url("/data.html").absoluteString, timeout: 20, settleMs: 300,
+        scripts: [
+            ExtractionRule(name: "Stock", selector: "window.__STOCK__"),
+            ExtractionRule(name: "SKU", selector: "window.__SKU__"),
+            ExtractionRule(name: "Price cents",
+                           selector: "document.getElementById('price').dataset.cents"),
+        ])
+    #expect(page.scriptResults["Stock"] == "17")
+    #expect(page.scriptResults["SKU"] == "ACME-1")
+    #expect(page.scriptResults["Price cents"] == "4999")
+}
+
+/// One broken snippet must not cost the page or the other snippets — the same
+/// rule an invalid CSS selector already follows.
+@Test func aThrowingSnippetYieldsNothingAndSpareTheRest() async throws {
+    let server = try TinyServer(pages: ["data.html": dataPage])
+    defer { server.stop() }
+    try await server.waitUntilReady()
+
+    let page = try await WebKitRenderer(poolSize: 1).render(
+        url: server.url("/data.html").absoluteString, timeout: 20, settleMs: 300,
+        scripts: [
+            ExtractionRule(name: "Broken", selector: "nope.does.not.exist()"),
+            ExtractionRule(name: "SKU", selector: "window.__SKU__"),
+        ])
+    #expect(page.scriptResults["Broken"] == nil)
+    #expect(page.scriptResults["SKU"] == "ACME-1")
+    #expect(!page.html.isEmpty, "the render itself survived")
+}
+
+/// A snippet is user text going into a JavaScript program, so it is passed as a
+/// JSON string literal rather than spliced in — the same reasoning that keeps
+/// user input out of the SQL.
+@Test func aSnippetContainingQuotesIsNotSpliced() async throws {
+    let server = try TinyServer(pages: ["data.html": dataPage])
+    defer { server.stop() }
+    try await server.waitUntilReady()
+
+    // A snippet whose source contains both quote characters. Spliced in
+    // naively this would end the wrapper's own string and change the program.
+    let snippet = #"'a"b' + "c'd""#
+    let page = try await WebKitRenderer(poolSize: 1).render(
+        url: server.url("/data.html").absoluteString, timeout: 20, settleMs: 300,
+        scripts: [ExtractionRule(name: "Quoted", selector: snippet)])
+    #expect(page.scriptResults["Quoted"] == #"a"bc'd"#)
+}
+
+@Test func jsLiteralEscapesWhatItMust() {
+    #expect(RenderSession.jsLiteral("simple") == #""simple""#)
+    #expect(RenderSession.jsLiteral(#"has "quotes""#).contains(#"\""#))
+    #expect(RenderSession.jsLiteral("has\nnewline").contains(#"\n"#))
+}
+
+/// And the results reach the database as extractions, beside the CSS ones.
+@Test func javaScriptExtractionsLandInTheExtractionTab() async throws {
+    let server = try TinyServer(pages: ["index.html": dataPage])
+    defer { server.stop() }
+    try await server.waitUntilReady()
+
+    var config = CrawlConfig(seedURL: server.url("/index.html").absoluteString)
+    config.workers = 1
+    config.renderJavaScript = true
+    config.extractions = [ExtractionRule(name: "Price text", selector: "#price")]
+    config.javaScriptExtractions = [ExtractionRule(name: "Stock", selector: "window.__STOCK__")]
+
+    let (store, _) = try await CrawlSession.start(
+        dbPath: nil, config: config, client: URLSessionHTTPClient(),
+        parser: SwiftSoupParser(), renderer: WebKitRenderer(poolSize: 1), onProgress: nil)
+
+    let rows = try await store.dbQueue.read { db in
+        try Row.fetchAll(db, sql: "SELECT name, value FROM extractions ORDER BY name")
+    }
+    let byName = Dictionary(uniqueKeysWithValues: rows.map {
+        ($0["name"] as String? ?? "", $0["value"] as String? ?? "")
+    })
+    #expect(byName["Stock"] == "17", "a JavaScript-only value")
+    #expect(byName["Price text"] == "£49.99", "and a CSS-selector one, side by side")
+}

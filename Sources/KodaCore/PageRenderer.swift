@@ -6,6 +6,8 @@ public struct RenderedPage: Sendable, Equatable {
     public let html: String
     /// Console errors and uncaught exceptions the page produced.
     public let errors: [String]
+    /// Results of the caller's JavaScript snippets, by name.
+    public let scriptResults: [String: String]
     /// How long rendering took, which is the number that decides whether
     /// rendering a whole site is affordable.
     public let elapsedMs: Int
@@ -14,9 +16,11 @@ public struct RenderedPage: Sendable, Equatable {
     /// happens on sites that serve different content to a real browser.
     public let status: Int?
 
-    public init(html: String, errors: [String], elapsedMs: Int, status: Int? = nil) {
+    public init(html: String, errors: [String], elapsedMs: Int, status: Int? = nil,
+                scriptResults: [String: String] = [:]) {
         self.html = html
         self.errors = errors
+        self.scriptResults = scriptResults
         self.elapsedMs = elapsedMs
         self.status = status
     }
@@ -36,4 +40,17 @@ public enum RenderFailure: Error, Sendable, Equatable {
 /// implementation lives in `KodaRender` and is injected.
 public protocol PageRenderer: Sendable {
     func render(url: String, timeout: TimeInterval, settleMs: Int) async throws -> RenderedPage
+
+    /// Render, then evaluate named snippets against the finished DOM.
+    /// Default-implemented by ignoring them, so a renderer that cannot run
+    /// scripts still satisfies the protocol.
+    func render(url: String, timeout: TimeInterval, settleMs: Int,
+                scripts: [ExtractionRule]) async throws -> RenderedPage
+}
+
+extension PageRenderer {
+    public func render(url: String, timeout: TimeInterval, settleMs: Int,
+                       scripts: [ExtractionRule]) async throws -> RenderedPage {
+        try await render(url: url, timeout: timeout, settleMs: settleMs)
+    }
 }

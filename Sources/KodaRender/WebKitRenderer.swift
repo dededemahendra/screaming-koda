@@ -38,8 +38,14 @@ public actor WebKitRenderer: PageRenderer {
 
     public func render(url: String, timeout: TimeInterval = 20,
                        settleMs: Int = 400) async throws -> RenderedPage {
+        try await render(url: url, timeout: timeout, settleMs: settleMs, scripts: [])
+    }
+
+    public func render(url: String, timeout: TimeInterval, settleMs: Int,
+                       scripts: [ExtractionRule]) async throws -> RenderedPage {
         await acquire()
         defer { release() }
-        return try await RenderSession.run(url: url, timeout: timeout, settleMs: settleMs)
+        return try await RenderSession.run(url: url, timeout: timeout, settleMs: settleMs,
+                                           scripts: scripts)
     }
 }

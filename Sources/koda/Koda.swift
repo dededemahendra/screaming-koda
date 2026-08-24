@@ -62,6 +62,9 @@ struct Crawl: AsyncParsableCommand {
     @Option(name: .long, help: "How many pages may render at once.")
     var renderConcurrency: Int = 2
 
+    @Option(name: .long, help: "JavaScript extraction as Name=expression. Needs --render. Repeatable.")
+    var js: [String] = []
+
     mutating func run() async throws {
         var config = CrawlConfig(seedURL: url)
         config.workers = workers
@@ -74,6 +77,21 @@ struct Crawl: AsyncParsableCommand {
         config.checkResources = checkResources
         config.renderJavaScript = render
         config.renderConcurrency = max(1, renderConcurrency)
+        for entry in js {
+            guard let split = entry.firstIndex(of: "=") else {
+                throw ValidationError("JavaScript extraction must be Name=expression, not \(entry)")
+            }
+            let name = String(entry[..<split]).trimmingCharacters(in: .whitespaces)
+            let expression = String(entry[entry.index(after: split)...])
+                .trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, !expression.isEmpty else {
+                throw ValidationError("JavaScript extraction must be Name=expression, not \(entry)")
+            }
+            config.javaScriptExtractions.append(ExtractionRule(name: name, selector: expression))
+        }
+        if !config.javaScriptExtractions.isEmpty && !render {
+            throw ValidationError("--js needs --render: there is no rendered DOM to evaluate against.")
+        }
         config.basicAuthUser = user ?? ""
         config.basicAuthPassword = password ?? ""
         for entry in header {

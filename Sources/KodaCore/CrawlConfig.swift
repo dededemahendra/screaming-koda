@@ -132,6 +132,13 @@ public struct CrawlConfig: Codable, Sendable {
         return out
     }
 
+    /// Named JavaScript snippets evaluated in the rendered page.
+    ///
+    /// Only runs when rendering is on — there is no DOM to evaluate against
+    /// otherwise. Each snippet's return value is stored as an extraction,
+    /// beside the CSS-selector ones, so both kinds share the Extraction tab.
+    public var javaScriptExtractions: [ExtractionRule] = []
+
     /// Sitemaps to seed the crawl from, beyond any that robots.txt announces.
     public var sitemapURLs: [String] = []
     /// Follow `Sitemap:` directives in robots.txt. On by default: it is where

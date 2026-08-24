@@ -66,12 +66,15 @@ final class RenderSession: NSObject, WKNavigationDelegate, WKScriptMessageHandle
         webView.navigationDelegate = self
     }
 
-    static func run(url: String, timeout: TimeInterval, settleMs: Int) async throws -> RenderedPage {
+    static func run(url: String, timeout: TimeInterval, settleMs: Int,
+                    scripts: [ExtractionRule] = []) async throws -> RenderedPage {
         let session = RenderSession()
-        return try await session.load(url: url, timeout: timeout, settleMs: settleMs)
+        return try await session.load(url: url, timeout: timeout, settleMs: settleMs,
+                                      scripts: scripts)
     }
 
-    private func load(url: String, timeout: TimeInterval, settleMs: Int) async throws -> RenderedPage {
+    private func load(url: String, timeout: TimeInterval, settleMs: Int,
+                      scripts: [ExtractionRule]) async throws -> RenderedPage {
         guard let target = URL(string: url) else {
             throw RenderFailure.navigationFailed("not a URL: \(url)")
         }
@@ -114,13 +117,36 @@ final class RenderSession: NSObject, WKNavigationDelegate, WKScriptMessageHandle
             throw RenderFailure.scriptFailed(String(describing: error))
         }
 
+        // The caller's snippets run against the finished DOM. Each is wrapped so
+        // a snippet that throws yields no value for that rule rather than
+        // failing the render — one bad snippet must not cost the page.
+        var scriptResults: [String: String] = [:]
+        for rule in scripts {
+            let wrapped = "(function(){ try { return String(eval(\(Self.jsLiteral(rule.selector)))); }"
+                + " catch (e) { return null; } })()"
+            if let value = try? await webView.evaluateJavaScript(wrapped),
+               let text = value as? String, !text.isEmpty, text != "null", text != "undefined" {
+                scriptResults[rule.name] = text
+            }
+        }
+
         webView.navigationDelegate = nil
         webView.configuration.userContentController.removeAllUserScripts()
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "kodaErrors")
 
         return RenderedPage(html: html, errors: errors,
                             elapsedMs: Int(Date().timeIntervalSince(started) * 1000),
-                            status: response?.statusCode)
+                            status: response?.statusCode,
+                            scriptResults: scriptResults)
+    }
+
+    /// A snippet is user text going into a JavaScript program, so it is passed
+    /// as a JSON string literal rather than spliced in — the same reasoning that
+    /// keeps user input out of the SQL.
+    nonisolated static func jsLiteral(_ source: String) -> String {
+        let data = (try? JSONSerialization.data(withJSONObject: [source])) ?? Data("[\"\"]".utf8)
+        let array = String(decoding: data, as: UTF8.self)
+        return String(array.dropFirst().dropLast())
     }
 
     private func finish() {
