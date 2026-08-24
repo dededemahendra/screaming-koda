@@ -147,6 +147,41 @@ public final class Store: @unchecked Sendable {
                 CREATE INDEX idx_facts_h2 ON page_facts(h2);
                 """)
         }
+        m.registerMigration("v5-headers-social-and-structured-data") { db in
+            // Storing headers wholesale rather than picking out one more named
+            // column each time: security headers, custom header extraction and
+            // plain header inspection are all the same need, and a JSON blob
+            // serves all three without a migration per header.
+            try db.execute(sql: """
+                ALTER TABLE responses ADD COLUMN headers_json TEXT;
+
+                ALTER TABLE page_facts ADD COLUMN og_title TEXT;
+                ALTER TABLE page_facts ADD COLUMN og_description TEXT;
+                ALTER TABLE page_facts ADD COLUMN og_image TEXT;
+                ALTER TABLE page_facts ADD COLUMN og_type TEXT;
+                ALTER TABLE page_facts ADD COLUMN twitter_card TEXT;
+                ALTER TABLE page_facts ADD COLUMN twitter_title TEXT;
+                ALTER TABLE page_facts ADD COLUMN twitter_image TEXT;
+                ALTER TABLE page_facts ADD COLUMN amphtml TEXT;
+                ALTER TABLE page_facts ADD COLUMN rel_prev TEXT;
+                ALTER TABLE page_facts ADD COLUMN rel_next TEXT;
+                ALTER TABLE page_facts ADD COLUMN analytics TEXT;
+
+                -- A page can declare many schema types, so this is a table
+                -- rather than a column. Indexed on type so "every page with
+                -- Product markup" is a lookup, not a scan.
+                CREATE TABLE structured_data (
+                  url_id INTEGER NOT NULL REFERENCES urls(id),
+                  format TEXT NOT NULL,
+                  type TEXT NOT NULL
+                );
+                CREATE INDEX idx_sd_url ON structured_data(url_id);
+                CREATE INDEX idx_sd_type ON structured_data(type);
+
+                ALTER TABLE images ADD COLUMN width INTEGER;
+                ALTER TABLE images ADD COLUMN height INTEGER;
+                """)
+        }
         return m
     }
 

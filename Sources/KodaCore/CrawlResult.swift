@@ -12,12 +12,15 @@ public struct CrawlResult: Sendable {
     public let redirectTarget: NormalizedURL?
     public let bodyGz: Data?
     public let xRobotsTag: String?
+    /// Every response header, for the Security tab and custom header extraction.
+    public let headers: [String: String]
     public let facts: PageFacts?
 
     public init(
         urlID: Int64, url: NormalizedURL, depth: Int, status: Int, errorKind: String?,
         contentType: String?, contentLength: Int?, responseTimeMs: Int,
-        redirectTarget: NormalizedURL?, bodyGz: Data?, xRobotsTag: String?, facts: PageFacts?
+        redirectTarget: NormalizedURL?, bodyGz: Data?, xRobotsTag: String?,
+        headers: [String: String] = [:], facts: PageFacts?
     ) {
         self.urlID = urlID
         self.url = url
@@ -30,6 +33,7 @@ public struct CrawlResult: Sendable {
         self.redirectTarget = redirectTarget
         self.bodyGz = bodyGz
         self.xRobotsTag = xRobotsTag
+        self.headers = headers
         self.facts = facts
     }
 }

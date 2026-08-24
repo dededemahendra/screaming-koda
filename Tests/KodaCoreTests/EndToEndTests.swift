@@ -170,7 +170,7 @@ private func redirectServerScript() throws -> URL {
     #expect(robotsOutcome == .parsed)
     let summary = try store.summary()
 
-    #expect(summary.byStatusClass["2xx"] == 4, "index, about, dupe, latin1")
+    #expect(summary.byStatusClass["2xx"] == 5, "index, about, dupe, latin1, rich")
     // missing.html (a real dead link) plus pic.png and noalt.png: checkImages now fetches
     // both <img> sources on index.html, and neither file exists on the fixture server, so
     // both genuinely 404. blocked/secret.html is not among these three because robots.txt
@@ -311,7 +311,7 @@ private func redirectServerScript() throws -> URL {
         client: URLSessionHTTPClient(), parser: SwiftSoupParser(), onProgress: nil)
     let counts = try store.counts(for: Reports.all)
 
-    #expect(counts["titles.all"] == 4, "index, about, dupe, latin1 are the HTML 200s")
+    #expect(counts["titles.all"] == 5, "index, about, dupe, latin1, rich are the HTML 200s")
     #expect(counts["titles.duplicate"] == 2, "'Shared Title' on about and dupe")
     #expect(counts["titles.missing"] == 0)
     #expect(counts["metaDescription.missing"] == 1, "dupe.html has no description")
@@ -354,7 +354,7 @@ private func redirectServerScript() throws -> URL {
     #expect(detail.value("Indexability") == Indexability.indexable)
 
     let outlinks = try store.outlinks(id: homeID)
-    #expect(outlinks.total == 5, "about, dupe, missing, blocked, latin1")
+    #expect(outlinks.total == 6, "about, dupe, missing, blocked, latin1, rich")
     #expect(outlinks.items.contains { $0.url.hasSuffix("/missing.html") && $0.status == 404 },
             "a broken outbound link is what this pane exists to show")
 
@@ -393,4 +393,54 @@ private func redirectServerScript() throws -> URL {
     // And it must not then be reported as a problem it does not have.
     let counts = try store.counts(for: Reports.all)
     #expect(counts["titles.missing"] == 0)
+}
+
+/// Wave 2 end to end: social tags, structured data, pagination, analytics and
+/// declared image dimensions, read off a real page served over real HTTP.
+@Test func aRichlyMarkedUpPageIsFullyExtracted() async throws {
+    let server = try FixtureServer(directory: try fixtureDirectory())
+    defer { server.stop() }
+    try await server.waitUntilReady()
+
+    var config = CrawlConfig(seedURL: "http://127.0.0.1:\(server.port)/index.html")
+    config.workers = 3
+    let (store, _) = try await CrawlSession.start(
+        dbPath: nil, config: config,
+        client: URLSessionHTTPClient(), parser: SwiftSoupParser(), onProgress: nil)
+
+    let row = try await store.dbQueue.read { db in
+        try Row.fetchOne(db, sql: """
+            SELECT f.og_title, f.og_type, f.twitter_card, f.amphtml,
+                   f.rel_prev, f.rel_next, f.analytics, f.h2,
+                   (SELECT group_concat(type) FROM structured_data sd WHERE sd.url_id = u.id) AS types,
+                   (SELECT count(DISTINCT format) FROM structured_data sd WHERE sd.url_id = u.id) AS formats
+            FROM urls u JOIN page_facts f ON f.url_id = u.id
+            WHERE u.path = '/rich.html'
+            """)
+    }
+    #expect(row?["og_title"] == "Rich fixture page")
+    #expect(row?["og_type"] == "article")
+    #expect(row?["twitter_card"] == "summary_large_image")
+    #expect(row?["h2"] == "A subheading")
+    #expect(row?["analytics"] == "Google Tag Manager")
+    #expect((row?["amphtml"] as String?)?.hasSuffix("amp/rich.html") == true)
+    #expect((row?["rel_next"] as String?)?.hasSuffix("about.html") == true)
+    #expect(row?["formats"] == 2, "JSON-LD and microdata on the same page")
+
+    let types = Set((row?["types"] as String? ?? "").split(separator: ",").map(String.init))
+    #expect(types == ["Article", "BreadcrumbList", "Organization"])
+
+    // Declared dimensions, and headers stored wholesale.
+    let extras = try await store.dbQueue.read { db in
+        try Row.fetchOne(db, sql: """
+            SELECT (SELECT i.width FROM images i
+                    JOIN urls s ON s.id = i.src_url_id
+                    JOIN urls p ON p.id = i.url_id
+                    WHERE s.path = '/pic.png' AND p.path = '/rich.html') AS w,
+                   (SELECT r.headers_json FROM responses r JOIN urls u ON u.id = r.url_id
+                    WHERE u.path = '/rich.html') AS h
+            """)
+    }
+    #expect(extras?["w"] == 320)
+    #expect((extras?["h"] as String?)?.lowercased().contains("content-type") == true)
 }

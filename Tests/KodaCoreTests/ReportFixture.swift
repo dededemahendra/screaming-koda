@@ -46,6 +46,25 @@ enum ReportFixture {
         /// http/https and www/non-www cases.
         var absoluteURL: String? = nil
         var hostOverride: String? = nil
+        var ogTitle: String? = nil
+        var ogImage: String? = nil
+        var twitterCard: String? = nil
+        var amphtml: String? = nil
+        var relPrev: String? = nil
+        var relNext: String? = nil
+        var analytics: String? = "Google Analytics 4"
+        /// (format, type) pairs written into `structured_data`.
+        var schema: [(String, String)] = [("json-ld", "WebPage")]
+        var headers: [String: String] = [
+            "Content-Type": "text/html",
+            "Strict-Transport-Security": "max-age=63072000",
+            "Content-Security-Policy": "default-src 'self'",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "SAMEORIGIN",
+            "Referrer-Policy": "strict-origin",
+        ]
+        var imageWidth: Int? = 100
+        var imageHeight: Int? = 80
     }
 
     /// Titles of an exact length, so the over-60 / under-30 filters are tested
@@ -171,6 +190,32 @@ enum ReportFixture {
         Page(path: "/anchor-empty"),
         Page(path: "/anchor-generic"),
         Page(path: "/anchor-many"),
+
+        // Social.
+        // og:title deliberately matches the page title, so it is the control for
+        // the "og:title differs" filter rather than another hit.
+        Page(path: "/social-full", title: "A shared title matching the page title",
+             ogTitle: "A shared title matching the page title",
+             ogImage: "https://fx.test/card.png",
+             twitterCard: "summary_large_image", amphtml: "https://fx.test/amp/social"),
+        Page(path: "/social-none"),
+        Page(path: "/social-og-differs", ogTitle: "Different from the title",
+             ogImage: "https://fx.test/c.png", twitterCard: "summary"),
+
+        // Pagination.
+        Page(path: "/page/1", relNext: "https://fx.test/page/2"),
+        Page(path: "/page/2", relPrev: "https://fx.test/page/1",
+             relNext: "https://fx.test/page/3"),
+        Page(path: "/page/3", canonicalTo: "/page/1", relPrev: "https://fx.test/page/2"),
+
+        // Structured data.
+        Page(path: "/schema-none", schema: []),
+        Page(path: "/schema-product", schema: [("json-ld", "Product")]),
+        Page(path: "/schema-mixed", schema: [("json-ld", "Article"), ("microdata", "Recipe")]),
+
+        // Tracking and headers.
+        Page(path: "/no-tracking", analytics: nil),
+        Page(path: "/no-security-headers", headers: ["Content-Type": "text/html"]),
     ]
 
     static let external: [Page] = [
@@ -223,12 +268,14 @@ enum ReportFixture {
                         sql: """
                             INSERT INTO responses (url_id, status, error_kind, content_type,
                                                    content_length, response_time_ms,
-                                                   redirect_target_id, fetched_at)
-                            VALUES (?,?,?,?,?,?,?,0)
+                                                   redirect_target_id, fetched_at, headers_json)
+                            VALUES (?,?,?,?,?,?,?,0,?)
                             """,
                         arguments: [id, status, page.errorKind, page.contentType,
                                     page.contentLength, 12,
-                                    page.redirectTo.flatMap { ids[$0] }])
+                                    page.redirectTo.flatMap { ids[$0] },
+                                    String(data: (try? JSONEncoder().encode(page.headers)) ?? Data(),
+                                           encoding: .utf8)])
                 }
                 guard page.hasFacts else { continue }
                 let title = page.title == auto ? autoTitle(page.path) : page.title
@@ -242,15 +289,23 @@ enum ReportFixture {
                           (url_id, title, title_length, title_count,
                            meta_description, meta_description_length, meta_description_count,
                            h1, h1_count, h2, h2_count, canonical_id, canonical_count,
-                           meta_robots, x_robots_tag, lang, word_count, content_hash)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'en',?,?)
+                           meta_robots, x_robots_tag, lang, word_count, content_hash,
+                           og_title, og_image, twitter_card, amphtml, rel_prev, rel_next, analytics)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'en',?,?,?,?,?,?,?,?,?)
                         """,
                     arguments: [id, title, title?.count, page.titleCount,
                                 desc, desc?.count, page.descCount,
                                 h1, page.h1Count, h2, page.h2Count, canonical,
                                 page.canonicalTo == nil ? 0 : page.canonicalCount,
                                 page.metaRobots, page.xRobots, page.wordCount,
-                                Data((page.contentKey ?? page.path).utf8)])
+                                Data((page.contentKey ?? page.path).utf8),
+                                page.ogTitle, page.ogImage, page.twitterCard, page.amphtml,
+                                page.relPrev, page.relNext, page.analytics])
+                for entry in page.schema {
+                    try db.execute(
+                        sql: "INSERT INTO structured_data (url_id, format, type) VALUES (?,?,?)",
+                        arguments: [id, entry.0, entry.1])
+                }
             }
 
             // Links. Only what the inlink-count filters need, plus enough to keep
@@ -297,8 +352,12 @@ enum ReportFixture {
             ]
             for ref in imageRefs {
                 guard let page = ids[ref.0], let src = ids[ref.1] else { continue }
-                try db.execute(sql: "INSERT INTO images (url_id, src_url_id, alt) VALUES (?,?,?)",
-                               arguments: [page, src, ref.2])
+                // The big image deliberately declares no dimensions, so the
+                // layout-shift filter has exactly one row to find.
+                let declared = ref.1.hasSuffix("big.png") ? (nil as Int?, nil as Int?) : (100, 80)
+                try db.execute(
+                    sql: "INSERT INTO images (url_id, src_url_id, alt, width, height) VALUES (?,?,?,?,?)",
+                    arguments: [page, src, ref.2, declared.0, declared.1])
             }
 
             let hreflang: [(String, String, String)] = [

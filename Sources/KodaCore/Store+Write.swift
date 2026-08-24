@@ -15,14 +15,15 @@ extension Store {
                     sql: """
                         INSERT INTO responses
                           (url_id, status, error_kind, content_type, content_length,
-                           response_time_ms, redirect_target_id, fetched_at, body_gz)
-                        VALUES (?,?,?,?,?,?,?,?,?)
+                           response_time_ms, redirect_target_id, fetched_at, body_gz, headers_json)
+                        VALUES (?,?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(url_id) DO UPDATE SET
                           status=excluded.status, error_kind=excluded.error_kind,
                           content_type=excluded.content_type, content_length=excluded.content_length,
                           response_time_ms=excluded.response_time_ms,
                           redirect_target_id=excluded.redirect_target_id,
-                          fetched_at=excluded.fetched_at, body_gz=excluded.body_gz
+                          fetched_at=excluded.fetched_at, body_gz=excluded.body_gz,
+                          headers_json=excluded.headers_json
                         """,
                     arguments: [
                         result.urlID, result.status, result.errorKind, result.contentType,
@@ -31,6 +32,9 @@ extension Store {
                                                config: config, seedHost: seedHost, now: now, discovered: &discovered,
                                                inheritsParentDepth: true),
                         now.timeIntervalSince1970, result.bodyGz,
+                        result.headers.isEmpty ? nil
+                            : String(data: (try? JSONEncoder().encode(result.headers)) ?? Data(),
+                                     encoding: .utf8),
                     ]
                 )
 
@@ -60,8 +64,11 @@ extension Store {
                   (url_id, title, title_length, title_count,
                    meta_description, meta_description_length, meta_description_count,
                    h1, h1_count, h2, h2_count, canonical_id, canonical_count,
-                   meta_robots, x_robots_tag, lang, word_count, content_hash)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   meta_robots, x_robots_tag, lang, word_count, content_hash,
+                   og_title, og_description, og_image, og_type,
+                   twitter_card, twitter_title, twitter_image,
+                   amphtml, rel_prev, rel_next, analytics)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(url_id) DO UPDATE SET
                   title=excluded.title, title_length=excluded.title_length, title_count=excluded.title_count,
                   meta_description=excluded.meta_description,
@@ -72,7 +79,13 @@ extension Store {
                   canonical_id=excluded.canonical_id, canonical_count=excluded.canonical_count,
                   meta_robots=excluded.meta_robots,
                   x_robots_tag=excluded.x_robots_tag, lang=excluded.lang,
-                  word_count=excluded.word_count, content_hash=excluded.content_hash
+                  word_count=excluded.word_count, content_hash=excluded.content_hash,
+                  og_title=excluded.og_title, og_description=excluded.og_description,
+                  og_image=excluded.og_image, og_type=excluded.og_type,
+                  twitter_card=excluded.twitter_card, twitter_title=excluded.twitter_title,
+                  twitter_image=excluded.twitter_image, amphtml=excluded.amphtml,
+                  rel_prev=excluded.rel_prev, rel_next=excluded.rel_next,
+                  analytics=excluded.analytics
                 """,
             arguments: [
                 result.urlID, facts.title, facts.titleLength, facts.titleCount,
@@ -80,6 +93,10 @@ extension Store {
                 facts.h1, facts.h1Count, facts.h2, facts.h2Count,
                 canonicalID, facts.canonicalCount, facts.metaRobots, result.xRobotsTag,
                 facts.lang, facts.wordCount, facts.contentHash,
+                facts.ogTitle, facts.ogDescription, facts.ogImage, facts.ogType,
+                facts.twitterCard, facts.twitterTitle, facts.twitterImage,
+                facts.amphtml, facts.relPrev, facts.relNext,
+                facts.analytics.isEmpty ? nil : facts.analytics.joined(separator: ", "),
             ]
         )
 
@@ -113,8 +130,15 @@ extension Store {
                                            seedHost: seedHost, now: now,
                                            enqueue: config.checkImages, discovered: &discovered,
                                            checkOnly: config.checkImages)
-            try db.execute(sql: "INSERT INTO images (url_id, src_url_id, alt) VALUES (?,?,?)",
-                           arguments: [result.urlID, srcID, image.alt])
+            try db.execute(
+                sql: "INSERT INTO images (url_id, src_url_id, alt, width, height) VALUES (?,?,?,?,?)",
+                arguments: [result.urlID, srcID, image.alt, image.width, image.height])
+        }
+
+        try db.execute(sql: "DELETE FROM structured_data WHERE url_id = ?", arguments: [result.urlID])
+        for entry in facts.structuredData {
+            try db.execute(sql: "INSERT INTO structured_data (url_id, format, type) VALUES (?,?,?)",
+                           arguments: [result.urlID, entry.format, entry.type])
         }
 
         try db.execute(sql: "DELETE FROM hreflang WHERE url_id = ?", arguments: [result.urlID])

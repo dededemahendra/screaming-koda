@@ -273,7 +273,8 @@ public actor CrawlEngine {
                 contentLength: response.body?.count,
                 responseTimeMs: response.elapsedMs,
                 redirectTarget: redirectTarget, bodyGz: bodyGz,
-                xRobotsTag: response.header("x-robots-tag"), facts: facts
+                xRobotsTag: response.header("x-robots-tag"), headers: response.headers,
+                facts: facts
             )
         }
     }

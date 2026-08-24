@@ -40,6 +40,14 @@ public enum Reports {
         "f.\(column) IS NULL OR trim(f.\(column)) = ''"
     }
 
+    /// Headers are stored as a JSON object, so this matches the *name* rather
+    /// than parsing the blob: a response that never carried the header at all
+    /// (`headers_json IS NULL`) counts as missing too, which is what a
+    /// status-checked HEAD with no headers recorded looks like.
+    static func missingHeader(_ name: String) -> String {
+        "r.headers_json IS NULL OR lower(r.headers_json) NOT LIKE '%\"\(name)\"%'"
+    }
+
     static func directive(_ token: String) -> String {
         "lower(coalesce(f.meta_robots, '') || ' ' || coalesce(f.x_robots_tag, '')) LIKE '%\(token)%'"
     }
@@ -144,6 +152,52 @@ public enum Reports {
                  FROM links l WHERE l.to_url_id = u.id)
                 """,
             width: 70, alignment: .trailing)
+        static let ogTitle = ReportColumn(id: "ogTitle", header: "og:title",
+                                          expression: "f.og_title", width: 240)
+        static let ogImage = ReportColumn(id: "ogImage", header: "og:image",
+                                          expression: "f.og_image", width: 240)
+        static let ogType = ReportColumn(id: "ogType", header: "og:type",
+                                         expression: "f.og_type", width: 100)
+        static let twitterCard = ReportColumn(id: "twitterCard", header: "twitter:card",
+                                              expression: "f.twitter_card", width: 140)
+        static let amphtml = ReportColumn(id: "amphtml", header: "AMP Version",
+                                          expression: "f.amphtml", width: 240)
+        static let relPrev = ReportColumn(id: "relPrev", header: "rel=prev",
+                                          expression: "f.rel_prev", width: 240)
+        static let relNext = ReportColumn(id: "relNext", header: "rel=next",
+                                          expression: "f.rel_next", width: 240)
+        static let analytics = ReportColumn(id: "analytics", header: "Tracking",
+                                            expression: "f.analytics", width: 200)
+        static let schemaTypes = ReportColumn(
+            id: "schemaTypes", header: "Types",
+            expression: """
+                (SELECT group_concat(DISTINCT sd.type) FROM structured_data sd
+                 WHERE sd.url_id = u.id)
+                """,
+            width: 260)
+        static let schemaFormats = ReportColumn(
+            id: "schemaFormats", header: "Formats",
+            expression: """
+                (SELECT group_concat(DISTINCT sd.format) FROM structured_data sd
+                 WHERE sd.url_id = u.id)
+                """,
+            width: 140)
+        static let imageDimensions = ReportColumn(
+            id: "dimensions", header: "Declared Size",
+            // An image referenced by several pages can be declared with a size
+            // on one and without on another. `LIMIT 1` with no ORDER BY would
+            // show whichever row SQLite returned first, so the column would flip
+            // between runs; a declared size always wins. The "no declared
+            // dimensions" filter uses EXISTS, so it still flags the page that
+            // omitted them.
+            expression: """
+                (SELECT CASE WHEN i.width IS NULL OR i.height IS NULL THEN NULL
+                             ELSE i.width || ' x ' || i.height END
+                 FROM images i WHERE i.src_url_id = u.id
+                 ORDER BY (i.width IS NULL OR i.height IS NULL) ASC, i.url_id ASC
+                 LIMIT 1)
+                """,
+            width: 110)
         static let topAnchor = ReportColumn(
             id: "topAnchor", header: "Most Common Anchor",
             expression: """
@@ -162,6 +216,7 @@ public enum Reports {
         internalURLs, external, responseCodes, titles, metaDescription, headings,
         images, canonicals, directives, hreflang, pageDepth,
         content, urlStructure, anchorText,
+        social, structuredData, pagination, security,
     ]
 
     public static let internalURLs = Report(
@@ -169,11 +224,17 @@ public enum Reports {
         predicate: "u.is_internal = 1 AND \(pageRows)",
         columns: [Col.address, Col.status, Col.contentType, Col.indexability,
                   Col.title, Col.titleLength, Col.h1, Col.wordCount, Col.depth,
-                  Col.inlinks, Col.responseTime],
+                  Col.inlinks, Col.analytics, Col.responseTime],
         filters: [
             allFilter,
             ReportFilter(id: "nonIndexable", name: "Non-indexable",
                          predicate: Indexability.isNonIndexable, isIssue: true),
+            // Detected from markup, so a tag injected at runtime by another
+            // script is invisible here — the same blind spot the crawler has
+            // everywhere without a rendering step.
+            ReportFilter(id: "noAnalytics", name: "No tracking detected", predicate: """
+                (\(htmlPage)) AND (f.analytics IS NULL OR trim(f.analytics) = '')
+                """, isIssue: true),
         ])
 
     public static let external = Report(
@@ -285,7 +346,7 @@ public enum Reports {
         id: "images", name: "Images",
         predicate: "u.id IN (SELECT src_url_id FROM images)",
         columns: [Col.address, Col.status, Col.contentType, Col.size,
-                  Col.referencedBy, Col.noAltOn],
+                  Col.imageDimensions, Col.referencedBy, Col.noAltOn],
         filters: [
             allFilter,
             ReportFilter(id: "missingAlt", name: "Missing alt text", predicate: """
@@ -297,6 +358,11 @@ public enum Reports {
                 """, isIssue: true),
             ReportFilter(id: "over100kb", name: "Over 100KB",
                          predicate: "r.content_length > 102400", isIssue: true),
+            // Undeclared dimensions are the usual cause of layout shift.
+            ReportFilter(id: "noDimensions", name: "No declared dimensions", predicate: """
+                EXISTS (SELECT 1 FROM images i WHERE i.src_url_id = u.id
+                        AND (i.width IS NULL OR i.height IS NULL))
+                """, isIssue: true),
         ])
 
     public static let canonicals = Report(
@@ -469,6 +535,107 @@ public enum Reports {
                 (SELECT count(DISTINCT trim(lower(coalesce(l.anchor_text, ''))))
                  FROM links l WHERE l.to_url_id = u.id) >= 5
                 """, isIssue: true),
+        ])
+
+    /// How a page presents itself when it is shared. Every field here is markup
+    /// the crawler already fetched and, until now, threw away.
+    public static let social = Report(
+        id: "social", name: "Social",
+        predicate: htmlPage,
+        columns: [Col.address, Col.ogTitle, Col.ogImage, Col.ogType,
+                  Col.twitterCard, Col.amphtml, Col.title],
+        filters: [
+            allFilter,
+            ReportFilter(id: "noOG", name: "No Open Graph tags", predicate: """
+                f.og_title IS NULL AND f.og_description IS NULL AND f.og_image IS NULL
+                """, isIssue: true),
+            ReportFilter(id: "noOGImage", name: "No og:image",
+                         predicate: missing("og_image"), isIssue: true),
+            // A share card with no title falls back to whatever the network
+            // scrapes, which is rarely what anyone intended.
+            ReportFilter(id: "noOGTitle", name: "No og:title",
+                         predicate: missing("og_title"), isIssue: true),
+            ReportFilter(id: "noTwitterCard", name: "No twitter:card",
+                         predicate: missing("twitter_card"), isIssue: true),
+            ReportFilter(id: "ogTitleDiffers", name: "og:title differs from title", predicate: """
+                f.og_title IS NOT NULL AND f.title IS NOT NULL AND trim(f.og_title) != trim(f.title)
+                """),
+            ReportFilter(id: "hasAMP", name: "Has an AMP version",
+                         predicate: "f.amphtml IS NOT NULL AND trim(f.amphtml) != ''"),
+        ])
+
+    /// Which pages carry which schema types. Deliberately types only: validating
+    /// a payload against schema.org is a much larger feature than finding out
+    /// which pages have markup at all.
+    public static let structuredData = Report(
+        id: "structuredData", name: "Structured Data",
+        predicate: htmlPage,
+        columns: [Col.address, Col.schemaFormats, Col.schemaTypes, Col.title, Col.indexability],
+        filters: [
+            allFilter,
+            ReportFilter(id: "none", name: "No structured data", predicate: """
+                NOT EXISTS (SELECT 1 FROM structured_data sd WHERE sd.url_id = u.id)
+                """, isIssue: true),
+            ReportFilter(id: "jsonLD", name: "JSON-LD", predicate: """
+                EXISTS (SELECT 1 FROM structured_data sd
+                        WHERE sd.url_id = u.id AND sd.format = 'json-ld')
+                """),
+            ReportFilter(id: "microdata", name: "Microdata", predicate: """
+                EXISTS (SELECT 1 FROM structured_data sd
+                        WHERE sd.url_id = u.id AND sd.format = 'microdata')
+                """),
+            ReportFilter(id: "rdfa", name: "RDFa", predicate: """
+                EXISTS (SELECT 1 FROM structured_data sd
+                        WHERE sd.url_id = u.id AND sd.format = 'rdfa')
+                """),
+            // Mixing formats is usually two plugins disagreeing rather than a
+            // deliberate choice, and it is how contradictory markup ships.
+            ReportFilter(id: "mixedFormats", name: "More than one format", predicate: """
+                (SELECT count(DISTINCT sd.format) FROM structured_data sd
+                 WHERE sd.url_id = u.id) > 1
+                """, isIssue: true),
+        ])
+
+    public static let pagination = Report(
+        id: "pagination", name: "Pagination",
+        predicate: "\(htmlPage) AND (f.rel_prev IS NOT NULL OR f.rel_next IS NOT NULL)",
+        columns: [Col.address, Col.relPrev, Col.relNext, Col.canonical, Col.indexability],
+        filters: [
+            allFilter,
+            ReportFilter(id: "firstPage", name: "First page (next only)",
+                         predicate: "f.rel_prev IS NULL AND f.rel_next IS NOT NULL"),
+            ReportFilter(id: "lastPage", name: "Last page (prev only)",
+                         predicate: "f.rel_next IS NULL AND f.rel_prev IS NOT NULL"),
+            // A paginated page that canonicalises to page one removes itself,
+            // and everything only reachable through it, from the index.
+            ReportFilter(id: "canonicalised", name: "Canonicalised away", predicate: """
+                f.canonical_id IS NOT NULL AND f.canonical_id != u.id
+                """, isIssue: true),
+            ReportFilter(id: "noindexed", name: "Paginated and noindexed",
+                         predicate: directive("noindex"), isIssue: true),
+        ])
+
+    /// Response headers, stored wholesale so a new check is a filter rather than
+    /// a migration. Matching is on the JSON blob, which is why each predicate
+    /// looks for the header name rather than parsing it.
+    public static let security = Report(
+        id: "security", name: "Security",
+        predicate: "u.is_internal = 1 AND r.status IS NOT NULL AND \(pageRows)",
+        columns: [Col.address, Col.status, Col.scheme, Col.contentType, Col.indexability],
+        filters: [
+            allFilter,
+            ReportFilter(id: "noHSTS", name: "No HSTS",
+                         predicate: missingHeader("strict-transport-security"), isIssue: true),
+            ReportFilter(id: "noCSP", name: "No Content-Security-Policy",
+                         predicate: missingHeader("content-security-policy"), isIssue: true),
+            ReportFilter(id: "noNosniff", name: "No X-Content-Type-Options",
+                         predicate: missingHeader("x-content-type-options"), isIssue: true),
+            ReportFilter(id: "noFrameOptions", name: "No X-Frame-Options",
+                         predicate: missingHeader("x-frame-options"), isIssue: true),
+            ReportFilter(id: "noReferrerPolicy", name: "No Referrer-Policy",
+                         predicate: missingHeader("referrer-policy"), isIssue: true),
+            ReportFilter(id: "insecure", name: "Served over HTTP",
+                         predicate: "u.url NOT LIKE 'https://%'", isIssue: true),
         ])
 
     public static let pageDepth = Report(

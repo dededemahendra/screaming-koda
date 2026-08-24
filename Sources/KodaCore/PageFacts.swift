@@ -17,10 +17,30 @@ public struct LinkFact: Sendable {
 public struct ImageFact: Sendable {
     public let src: String
     public let alt: String?
+    /// The declared `width`/`height` attributes, when present. Undeclared
+    /// dimensions are the usual cause of layout shift, so their *absence* is
+    /// the finding — this is not the decoded size of the image.
+    public let width: Int?
+    public let height: Int?
 
-    public init(src: String, alt: String?) {
+    public init(src: String, alt: String?, width: Int? = nil, height: Int? = nil) {
         self.src = src
         self.alt = alt
+        self.width = width
+        self.height = height
+    }
+}
+
+/// One structured-data declaration. A page can carry many.
+public struct StructuredDataFact: Sendable, Equatable {
+    /// `json-ld`, `microdata` or `rdfa`.
+    public let format: String
+    /// The schema type, e.g. `Product`, `Article`, `BreadcrumbList`.
+    public let type: String
+
+    public init(format: String, type: String) {
+        self.format = format
+        self.type = type
     }
 }
 
@@ -54,6 +74,20 @@ public struct PageFacts: Sendable {
     public var lang: String?
     public var wordCount: Int = 0
     public var contentHash: Data = Data()
+    public var ogTitle: String?
+    public var ogDescription: String?
+    public var ogImage: String?
+    public var ogType: String?
+    public var twitterCard: String?
+    public var twitterTitle: String?
+    public var twitterImage: String?
+    /// `<link rel="amphtml">` target, when the page declares an AMP version.
+    public var amphtml: String?
+    public var relPrev: String?
+    public var relNext: String?
+    /// Names of analytics or tag-manager scripts detected in the markup.
+    public var analytics: [String] = []
+    public var structuredData: [StructuredDataFact] = []
     public var links: [LinkFact] = []
     public var images: [ImageFact] = []
     public var hreflang: [HreflangFact] = []

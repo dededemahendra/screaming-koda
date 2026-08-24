@@ -85,6 +85,7 @@ private func rows(_ store: Store, _ report: Report, _ filterID: String) throws -
         "internal", "external", "responseCodes", "titles", "metaDescription", "headings",
         "images", "canonicals", "directives", "hreflang", "pageDepth",
         "content", "urls", "anchorText",
+        "social", "structuredData", "pagination", "security",
     ])
 }
 
@@ -176,8 +177,10 @@ private func rows(_ store: Store, _ report: Report, _ filterID: String) throws -
 @Test func canonicalsReportDistinguishesSelfFromCanonicalised() throws {
     let store = try ReportFixture.make()
     #expect(try rows(store, Reports.canonicals, "missing") == ["/canon-missing"])
+    // /page/3 canonicalises to page one, which is the pagination anti-pattern
+    // the Pagination tab flags separately.
     #expect(try rows(store, Reports.canonicals, "canonicalised")
-            == ["/canonicalised", "/canon-to-404"])
+            == ["/canonicalised", "/canon-to-404", "/page/3"])
     #expect(try rows(store, Reports.canonicals, "toNon200") == ["/canon-to-404"])
     #expect(try rows(store, Reports.canonicals, "self").contains("/"))
     #expect(try !rows(store, Reports.canonicals, "self").contains("/canonicalised"))
@@ -285,4 +288,113 @@ private func rows(_ store: Store, _ report: Report, _ filterID: String) throws -
     // the filter must return nothing rather than everything.
     #expect(try rows(store, Reports.headings, "duplicateH2").isEmpty)
     #expect(try rows(store, Reports.headings, "longH2") == ["/long-h2"])
+}
+
+
+// MARK: - Wave 2 reports
+
+@Test func socialReportFindsMissingShareTags() throws {
+    let store = try ReportFixture.make()
+    let none = try rows(store, Reports.social, "noOG")
+    #expect(none.contains("/social-none"))
+    #expect(!none.contains("/social-full"))
+
+    #expect(try rows(store, Reports.social, "hasAMP") == ["/social-full"])
+    #expect(try rows(store, Reports.social, "ogTitleDiffers") == ["/social-og-differs"])
+
+    let noImage = try rows(store, Reports.social, "noOGImage")
+    #expect(noImage.contains("/social-none"))
+    #expect(!noImage.contains("/social-full"))
+}
+
+@Test func structuredDataReportSeparatesFormats() throws {
+    let store = try ReportFixture.make()
+    #expect(try rows(store, Reports.structuredData, "none") == ["/schema-none"])
+    #expect(try rows(store, Reports.structuredData, "mixedFormats") == ["/schema-mixed"])
+
+    let microdata = try rows(store, Reports.structuredData, "microdata")
+    #expect(microdata == ["/schema-mixed"])
+    #expect(try rows(store, Reports.structuredData, "jsonLD").contains("/schema-product"))
+    #expect(try rows(store, Reports.structuredData, "rdfa").isEmpty)
+}
+
+/// The tab exists to answer "what is in a paginated set", so a page with
+/// neither rel does not belong in it at all.
+@Test func paginationReportOnlyContainsPaginatedPages() throws {
+    let store = try ReportFixture.make()
+    #expect(try rows(store, Reports.pagination, "all") == ["/page/1", "/page/2", "/page/3"])
+    #expect(try rows(store, Reports.pagination, "firstPage") == ["/page/1"])
+    #expect(try rows(store, Reports.pagination, "lastPage") == ["/page/3"])
+}
+
+/// A paginated page that canonicalises to page one removes itself, and
+/// everything only reachable through it, from the index.
+@Test func paginationReportFlagsPagesCanonicalisedAway() throws {
+    let store = try ReportFixture.make()
+    #expect(try rows(store, Reports.pagination, "canonicalised") == ["/page/3"])
+}
+
+@Test func securityReportFindsMissingHeaders() throws {
+    let store = try ReportFixture.make()
+    for (filter, header) in [("noHSTS", "HSTS"), ("noCSP", "CSP"),
+                             ("noNosniff", "nosniff"), ("noFrameOptions", "frame options"),
+                             ("noReferrerPolicy", "referrer policy")] {
+        let found = try rows(store, Reports.security, filter)
+        #expect(found.contains("/no-security-headers"), "\(header) not flagged")
+        #expect(!found.contains("/"), "the home page sets \(header) and must not be flagged")
+    }
+}
+
+/// A response with no headers recorded at all — a HEAD check, or a row written
+/// before v5 — has to count as missing rather than silently passing.
+@Test func aResponseWithNoRecordedHeadersCountsAsMissing() throws {
+    let store = try ReportFixture.make()
+    try store.dbQueue.write { db in
+        try db.execute(sql: """
+            UPDATE responses SET headers_json = NULL
+            WHERE url_id = (SELECT id FROM urls WHERE path = '/one-inlink')
+            """)
+    }
+    #expect(try rows(store, Reports.security, "noHSTS").contains("/one-inlink"))
+}
+
+@Test func internalReportFlagsPagesWithNoTracking() throws {
+    let store = try ReportFixture.make()
+    let untracked = try rows(store, Reports.internalURLs, "noAnalytics")
+    #expect(untracked.contains("/no-tracking"))
+    #expect(!untracked.contains("/"), "the home page has a tag and must not be flagged")
+    #expect(!untracked.contains("/gone"), "a 404 is not a tracking problem")
+}
+
+@Test func imagesReportFlagsUndeclaredDimensions() throws {
+    let store = try ReportFixture.make()
+    #expect(try rows(store, Reports.images, "noDimensions") == ["/img/big.png"])
+}
+
+/// An image referenced by two pages, declared with a size on one and without on
+/// the other, must show the declared size rather than whichever row the database
+/// happened to return first.
+@Test func theDeclaredSizeColumnIsDeterministic() throws {
+    let store = try ReportFixture.make()
+    try store.dbQueue.write { db in
+        // /img/big.png is referenced once, with no dimensions. Add a second
+        // reference that does declare them.
+        try db.execute(sql: """
+            INSERT INTO images (url_id, src_url_id, alt, width, height)
+            SELECT (SELECT id FROM urls WHERE path = '/dupe-a'),
+                   (SELECT id FROM urls WHERE path = '/img/big.png'), 'big', 1200, 630
+            """)
+    }
+    let ids = try store.ids(for: Reports.images,
+                            filter: Reports.images.defaultFilter, sortBy: nil, ascending: true)
+    let big = try store.rows(ids: ids, columns: Reports.images.columns)
+        .first { $0.cells[0]?.hasSuffix("big.png") == true }
+    let column = Reports.images.columns.firstIndex { $0.id == "dimensions" }!
+    #expect(big?.cells[column] == "1200 x 630")
+
+    // And the page that omitted them is still flagged.
+    #expect(try ReportFixture.paths(store, store.ids(
+        for: Reports.images,
+        filter: Reports.images.filters.first { $0.id == "noDimensions" }!,
+        sortBy: nil, ascending: true)) == ["/img/big.png"])
 }

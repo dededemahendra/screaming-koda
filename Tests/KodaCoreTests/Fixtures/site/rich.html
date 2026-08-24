@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <title>A richly marked up fixture page</title>
+  <meta name="description" content="A page carrying social tags, structured data and pagination.">
+  <meta property="og:title" content="Rich fixture page">
+  <meta property="og:image" content="https://example.test/card.png">
+  <meta property="og:type" content="article">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="amphtml" href="amp/rich.html">
+  <link rel="prev" href="index.html">
+  <link rel="next" href="about.html">
+  <script type="application/ld+json">
+  {"@context":"https://schema.org","@graph":[
+    {"@type":"Article","headline":"Rich"},
+    {"@type":"BreadcrumbList"}
+  ]}
+  </script>
+  <script src="https://www.googletagmanager.com/gtm.js?id=GTM-XYZ"></script>
+</head>
+<body>
+  <h1>Rich</h1>
+  <h2>A subheading</h2>
+  <div itemscope itemtype="https://schema.org/Organization"><span>Acme</span></div>
+  <img src="pic.png" alt="A picture" width="320" height="240">
+</body>
+</html>
