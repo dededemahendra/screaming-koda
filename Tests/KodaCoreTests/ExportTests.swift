@@ -61,11 +61,39 @@ import Testing
     #expect(Set(addresses).count == addresses.count)
 }
 
-@Test func exportAllCoversEveryReport() throws {
+@Test func exportAllLeadsWithAnOverviewThenEveryReport() throws {
     let store = try ReportFixture.make()
     let exports = try store.exportAll()
-    #expect(exports.count == 25)
-    #expect(exports.map(\.name) == Reports.all.map(\.name))
+    #expect(exports.count == 26, "an overview plus every report")
+    #expect(exports.first?.name == "Overview",
+            "the person this gets handed to opens the first sheet")
+    #expect(Array(exports.dropFirst()).map(\.name) == Reports.all.map(\.name))
+}
+
+/// A summary listing a hundred and fifty rows of zero is not a summary.
+@Test func theOverviewListsOnlyIssuesThatWereActuallyFound() throws {
+    let store = try ReportFixture.make()
+    let overview = try store.overview()
+    let values = overview.rows.compactMap { $0.count > 2 ? $0[2] : nil }
+    #expect(!values.contains("0"), "every listed issue found something")
+
+    let items = overview.rows.compactMap { $0.count > 1 ? $0[1] : nil }
+    #expect(items.contains("Seed URL"))
+    #expect(items.contains("Total"))
+    #expect(items.contains("Missing"), "the Titles report's missing-title count")
+}
+
+/// The workbook and the window read from the same counts, so they cannot
+/// disagree about how many problems a crawl has.
+@Test func theOverviewAgreesWithTheSidebarCounts() throws {
+    let store = try ReportFixture.make()
+    let counts = try store.counts(for: Reports.all)
+    let overview = try store.overview()
+
+    let missingTitles = overview.rows.first {
+        $0.count > 2 && $0[0] == "Titles" && $0[1] == "Missing"
+    }
+    #expect(missingTitles?[2] == String(counts["titles.missing"] ?? -1))
 }
 
 @Test func exportRespectsALimit() throws {
