@@ -19,9 +19,26 @@ public enum ToolbarAction: Hashable, Sendable {
     }
 }
 
+/// How the workspace shows a crawl. The table answers "which pages", the tree
+/// answers "what is this site made of", and the graph answers "how does it hang
+/// together" — three different questions rather than three skins.
+public enum WorkspaceView: String, CaseIterable, Identifiable, Sendable {
+    case table, tree, graph
+    public var id: String { rawValue }
+
+    var symbol: String {
+        switch self {
+        case .table: return "tablecells"
+        case .tree: return "list.bullet.indent"
+        case .graph: return "point.3.connected.trianglepath.dotted"
+        }
+    }
+}
+
 public struct ContentView: View {
     @State private var controller: CrawlController
     @State private var showingSettings = false
+    @State private var view: WorkspaceView = .table
 
     public init(controller: CrawlController = CrawlController()) {
         _controller = State(initialValue: controller)
@@ -46,14 +63,24 @@ public struct ContentView: View {
                                 controller.select(reportID: report, filterID: filter)
                             })
                 VSplitView {
-                    URLTableView(rows: controller.rows,
+                    switch view {
+                    case .tree:
+                        SiteTreeView(root: controller.siteTree,
+                                     onSelect: { controller.selectRow(id: $0) })
+                            .frame(minHeight: 220)
+                    case .graph:
+                        LinkGraphView(graph: controller.linkGraph)
+                            .frame(minHeight: 220)
+                    case .table:
+                        URLTableView(rows: controller.rows,
                                  report: controller.selectedReport,
                                  revision: controller.revision,
                                  onSortChange: { columnID, ascending in
                                      controller.applySort(columnID: columnID, ascending: ascending)
                                  },
-                                 onSelect: { controller.selectRow(id: $0) })
-                        .frame(minHeight: 220)
+                                     onSelect: { controller.selectRow(id: $0) })
+                            .frame(minHeight: 220)
+                    }
                     InspectorView(detail: controller.detail,
                                   inlinks: controller.inlinks,
                                   outlinks: controller.outlinks,
@@ -129,6 +156,16 @@ public struct ContentView: View {
             // Changing the configuration mid-crawl would apply to nothing that
             // is already running and silently to whatever is not, so it waits.
             .disabled(controller.state.isActive)
+
+            Picker("", selection: $view) {
+                ForEach(WorkspaceView.allCases) { mode in
+                    Image(systemName: mode.symbol).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 120)
+            .help("Table, folder tree, or link graph")
 
             Menu {
                 Button("Current view as CSV…") { export(scope: .currentView, format: .csv) }

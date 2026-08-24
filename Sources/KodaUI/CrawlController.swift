@@ -78,6 +78,11 @@ public final class CrawlController {
     public private(set) var outlinks: InspectorRows<LinkRow>?
     public private(set) var images: InspectorRows<ImageRow>?
     public private(set) var redirectChain: [RedirectHop] = []
+    /// The site's shape. Recomputed with the counts rather than on every tick:
+    /// both walk the whole crawl, and neither needs to be more current than the
+    /// other.
+    public private(set) var siteTree: SiteTreeNode?
+    public private(set) var linkGraph: CrawlGraph?
 
     /// Every tab: the built-in reports followed by any custom ones that
     /// compiled. A definition that produced nothing usable is left out rather
@@ -423,6 +428,8 @@ public final class CrawlController {
         // A failed read keeps the previous counts rather than blanking the
         // sidebar: the same rule the row index follows.
         if let fresh = try? store.counts(for: availableReports) { counts = fresh }
+        if let tree = try? store.siteTree() { siteTree = tree }
+        if let graph = try? store.linkGraph() { linkGraph = graph }
     }
 
     /// A crawl that fetched nothing because robots.txt disallowed it looks
