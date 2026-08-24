@@ -31,6 +31,18 @@ public struct ImageFact: Sendable {
     }
 }
 
+/// A stylesheet or script the page loads.
+public struct ResourceFact: Sendable, Equatable {
+    public let src: String
+    /// `css` or `js`.
+    public let kind: String
+
+    public init(src: String, kind: String) {
+        self.src = src
+        self.kind = kind
+    }
+}
+
 /// One extracted value. A rule that matches several elements produces several
 /// of these, which is why `position` exists.
 public struct ExtractionFact: Sendable, Equatable {
@@ -103,6 +115,7 @@ public struct PageFacts: Sendable {
     public var analytics: [String] = []
     public var structuredData: [StructuredDataFact] = []
     public var extractions: [ExtractionFact] = []
+    public var resources: [ResourceFact] = []
     public var links: [LinkFact] = []
     public var images: [ImageFact] = []
     public var hreflang: [HreflangFact] = []

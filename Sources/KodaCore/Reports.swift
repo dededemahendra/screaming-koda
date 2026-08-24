@@ -216,6 +216,14 @@ public enum Reports {
                    ORDER BY name ASC, position ASC LIMIT 5) e)
                 """,
             width: 380)
+        static let resourceKind = ReportColumn(
+            id: "kind", header: "Type",
+            expression: "(SELECT res.kind FROM resources res WHERE res.src_url_id = u.id LIMIT 1)",
+            width: 70)
+        static let usedOnPages = ReportColumn(
+            id: "usedOn", header: "Used On",
+            expression: "(SELECT count(DISTINCT res.url_id) FROM resources res WHERE res.src_url_id = u.id)",
+            width: 75, alignment: .trailing)
         static let inSitemap = ReportColumn(
             id: "inSitemap", header: "In Sitemap",
             expression: "CASE WHEN u.in_sitemap = 1 THEN 'Yes' ELSE 'No' END", width: 90)
@@ -237,7 +245,7 @@ public enum Reports {
         internalURLs, external, responseCodes, titles, metaDescription, headings,
         images, canonicals, directives, hreflang, pageDepth,
         content, urlStructure, anchorText,
-        social, structuredData, pagination, security, extraction, sitemap,
+        social, structuredData, pagination, security, extraction, sitemap, resources,
     ]
 
     public static let internalURLs = Report(
@@ -717,6 +725,33 @@ public enum Reports {
                          isIssue: true),
             ReportFilter(id: "uncrawled", name: "In the sitemap but never reached",
                          predicate: "u.in_sitemap = 1 AND r.status IS NULL", isIssue: true),
+        ])
+
+    /// Stylesheets and scripts, keyed on the resource URL — the same shape the
+    /// Images tab uses, for the same reason: the question is "is this file
+    /// broken", not "which page mentioned it".
+    ///
+    /// Empty unless `checkResources` is on, since a resource that was never
+    /// fetched has no status to report.
+    public static let resources = Report(
+        id: "resources", name: "Resources",
+        predicate: "u.id IN (SELECT src_url_id FROM resources)",
+        columns: [Col.address, Col.resourceKind, Col.status, Col.contentType,
+                  Col.size, Col.usedOnPages],
+        filters: [
+            allFilter,
+            ReportFilter(id: "css", name: "Stylesheets", predicate: """
+                EXISTS (SELECT 1 FROM resources res WHERE res.src_url_id = u.id AND res.kind = 'css')
+                """),
+            ReportFilter(id: "js", name: "Scripts", predicate: """
+                EXISTS (SELECT 1 FROM resources res WHERE res.src_url_id = u.id AND res.kind = 'js')
+                """),
+            ReportFilter(id: "broken", name: "Broken",
+                         predicate: "r.status = 0 OR r.status >= 400", isIssue: true),
+            ReportFilter(id: "over100kb", name: "Over 100KB",
+                         predicate: "r.content_length > 102400", isIssue: true),
+            ReportFilter(id: "insecure", name: "Loaded over HTTP",
+                         predicate: "u.url NOT LIKE 'https://%'", isIssue: true),
         ])
 
     public static let pageDepth = Report(

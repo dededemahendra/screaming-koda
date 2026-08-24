@@ -320,7 +320,10 @@ private func redirectServerScript() throws -> URL {
     #expect(counts["images.missingAlt"] == 1, "noalt.png")
     #expect(counts["responseCodes.clientError"] == 3, "missing.html, pic.png, noalt.png")
     #expect(counts["responseCodes.serverError"] == 0)
-    #expect(counts["external.all"] == 0, "the fixture site links nowhere off-host")
+    // rich.html loads Google Tag Manager, which is recorded as an external
+    // resource URL even though checkResources is off — the relationship is
+    // always stored, only the fetching is optional.
+    #expect(counts["external.all"] == 1, "the tag manager script")
 
     // The reports and the M1 summary must not disagree about the same crawl.
     let summary = try store.summary()

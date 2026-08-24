@@ -85,6 +85,7 @@ public struct ConfigSheet: View {
                 Section("What to fetch") {
                     Toggle("Status-check external links", isOn: $draft.checkExternalLinks)
                     Toggle("Status-check images", isOn: $draft.checkImages)
+                    Toggle("Status-check stylesheets and scripts", isOn: $draft.checkResources)
                     Toggle("Retain page bodies", isOn: $draft.retainBodies)
                 }
                 Section("URL filters") {

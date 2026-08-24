@@ -43,6 +43,9 @@ struct Crawl: AsyncParsableCommand {
     @Flag(name: .long, help: "Crawl only the seed and sitemap URLs, following no links.")
     var listMode = false
 
+    @Flag(name: .long, help: "Status-check stylesheets and scripts too.")
+    var checkResources = false
+
     mutating func run() async throws {
         var config = CrawlConfig(seedURL: url)
         config.workers = workers
@@ -52,6 +55,7 @@ struct Crawl: AsyncParsableCommand {
         config.sitemapURLs = sitemap
         config.discoverSitemaps = !noSitemapDiscovery
         config.listModeOnly = listMode
+        config.checkResources = checkResources
 
         guard let host = config.seedHost else {
             throw ValidationError("Not a crawlable http(s) URL: \(url)")

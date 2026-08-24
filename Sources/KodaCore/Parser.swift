@@ -130,6 +130,15 @@ public struct SwiftSoupParser: PageParser {
         facts.relPrev = try doc.select("link[rel=prev]").first()?.attr("href").trimmed()
         facts.relNext = try doc.select("link[rel=next]").first()?.attr("href").trimmed()
 
+        for element in try doc.select("link[rel=stylesheet][href]").array() {
+            let href = try element.attr("href").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !href.isEmpty { facts.resources.append(ResourceFact(src: href, kind: "css")) }
+        }
+        for element in try doc.select("script[src]").array() {
+            let src = try element.attr("src").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !src.isEmpty { facts.resources.append(ResourceFact(src: src, kind: "js")) }
+        }
+
         facts.structuredData = try Self.structuredData(doc)
         facts.analytics = try Self.analytics(doc)
 

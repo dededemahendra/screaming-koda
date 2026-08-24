@@ -21,6 +21,10 @@ public final class Store: @unchecked Sendable {
           SELECT src_url_id FROM images
           WHERE src_url_id NOT IN (SELECT to_url_id FROM links)
         )
+        AND u.id NOT IN (
+          SELECT src_url_id FROM resources
+          WHERE src_url_id NOT IN (SELECT to_url_id FROM links)
+        )
         """
 
     /// - Parameter path: file path, or nil for an in-memory database (tests).
@@ -201,6 +205,17 @@ public final class Store: @unchecked Sendable {
             try db.execute(sql: """
                 ALTER TABLE urls ADD COLUMN in_sitemap INTEGER NOT NULL DEFAULT 0;
                 CREATE INDEX idx_urls_sitemap ON urls(in_sitemap);
+                """)
+        }
+        m.registerMigration("v8-resources") { db in
+            try db.execute(sql: """
+                CREATE TABLE resources (
+                  url_id INTEGER NOT NULL REFERENCES urls(id),
+                  src_url_id INTEGER NOT NULL REFERENCES urls(id),
+                  kind TEXT NOT NULL
+                );
+                CREATE INDEX idx_resources_url ON resources(url_id);
+                CREATE INDEX idx_resources_src ON resources(src_url_id);
                 """)
         }
         return m

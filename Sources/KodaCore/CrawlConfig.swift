@@ -63,6 +63,14 @@ public struct CrawlConfig: Codable, Sendable {
     /// the "images over 100KB" report.
     public var checkImages: Bool = true
 
+    /// Fetch stylesheets and scripts with HEAD to record status and size.
+    ///
+    /// Off by default, unlike images. A broken stylesheet is a real finding, but
+    /// a page typically loads far more scripts than images and most of them are
+    /// third-party — so this roughly doubles a crawl's request count for a
+    /// narrower payoff. Opt in when auditing resources specifically.
+    public var checkResources: Bool = false
+
     /// User-defined CSS-selector extractions, applied to every HTML page.
     ///
     /// CSS rather than XPath because SwiftSoup already does CSS selectors, so

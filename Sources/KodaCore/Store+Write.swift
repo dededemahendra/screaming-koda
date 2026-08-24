@@ -139,6 +139,17 @@ extension Store {
                 arguments: [result.urlID, srcID, image.alt, image.width, image.height])
         }
 
+        try db.execute(sql: "DELETE FROM resources WHERE url_id = ?", arguments: [result.urlID])
+        for resource in facts.resources {
+            guard let src = URLNormalizer.normalize(resource.src, relativeTo: result.url) else { continue }
+            let srcID = try Self.upsertURL(db, src, parentDepth: result.depth, config: config,
+                                           seedHost: seedHost, now: now,
+                                           enqueue: config.checkResources, discovered: &discovered,
+                                           checkOnly: config.checkResources)
+            try db.execute(sql: "INSERT INTO resources (url_id, src_url_id, kind) VALUES (?,?,?)",
+                           arguments: [result.urlID, srcID, resource.kind])
+        }
+
         try db.execute(sql: "DELETE FROM extractions WHERE url_id = ?", arguments: [result.urlID])
         for entry in facts.extractions {
             try db.execute(
