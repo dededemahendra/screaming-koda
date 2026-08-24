@@ -8,7 +8,7 @@ struct Koda: AsyncParsableCommand {
         commandName: "koda",
         abstract: "Crawl a site and report on it.",
         version: KodaCoreInfo.versionString,
-        subcommands: [Crawl.self, Report.self, Export.self],
+        subcommands: [Crawl.self, Report.self, Export.self, Summary.self],
         defaultSubcommand: Crawl.self
     )
 }
@@ -37,12 +37,60 @@ struct Crawl: AsyncParsableCommand {
     @Flag(name: .long, help: "Continue an existing database instead of starting over.")
     var resume = false
 
+    @Option(name: .long, parsing: .singleValue,
+            help: "Only crawl URLs matching this regex. Repeatable; any match qualifies.")
+    var include: [String] = []
+
+    @Option(name: .long, parsing: .singleValue,
+            help: "Never crawl URLs matching this regex. Repeatable; wins over --include.")
+    var exclude: [String] = []
+
+    @Flag(name: .long, help: "Also crawl subdomains of the seed host.")
+    var subdomains = false
+
+    @Option(name: .long, help: "Maximum concurrent requests to any one host.")
+    var maxPerHost: Int = 5
+
+    @Option(name: .long, help: "Request timeout in seconds.")
+    var timeout: Double = 20
+
+    @Option(name: .long, help: "User agent to identify as.")
+    var userAgent: String = KodaCoreInfo.userAgent
+
+    @Flag(name: .long, help: "Follow internal links marked rel=nofollow.")
+    var followNofollow = false
+
+    @Flag(name: .long, help: "Skip status-checking external links.")
+    var skipExternal = false
+
+    @Flag(name: .long, help: "Skip status-checking images.")
+    var skipImages = false
+
+    @Flag(name: .long, help: "Do not store page bodies in the database.")
+    var noBodies = false
+
     mutating func run() async throws {
         var config = CrawlConfig(seedURL: url)
         config.workers = workers
         config.urlCap = limit
         config.maxDepth = maxDepth
         config.respectRobots = !ignoreRobots
+        config.include = include
+        config.exclude = exclude
+        config.crawlSubdomains = subdomains
+        config.maxPerHost = maxPerHost
+        config.timeout = timeout
+        config.userAgent = userAgent
+        config.followInternalNofollow = followNofollow
+        config.checkExternalLinks = !skipExternal
+        config.checkImages = !skipImages
+        config.retainBodies = !noBodies
+
+        for pattern in include + exclude {
+            guard (try? NSRegularExpression(pattern: pattern)) != nil else {
+                throw ValidationError("Not a valid regular expression: \(pattern)")
+            }
+        }
 
         guard let host = config.seedHost else {
             throw ValidationError("Not a crawlable http(s) URL: \(url)")
@@ -82,11 +130,13 @@ struct Crawl: AsyncParsableCommand {
         Self.printFindings(try store.reportCounts())
     }
 
-    static func printSummary(_ s: CrawlSummary, elapsed: TimeInterval) {
+    static func printSummary(_ s: CrawlSummary, elapsed: TimeInterval?) {
         func line(_ label: String, _ value: Any) {
             print("  \(label.padding(toLength: 26, withPad: " ", startingAt: 0)) \(value)")
         }
-        print("Crawl finished in \(String(format: "%.1f", elapsed))s")
+        if let elapsed {
+            print("Crawl finished in \(String(format: "%.1f", elapsed))s")
+        }
         print("\nURLs")
         line("Total discovered", s.totalURLs)
         line("Crawled", s.crawledURLs)

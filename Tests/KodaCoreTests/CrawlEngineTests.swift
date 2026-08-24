@@ -249,3 +249,59 @@ private func peakConcurrency(robots: RobotsRules) async throws -> Int {
     // Control for the test above: proves the probe can observe concurrency at all.
     #expect(try await peakConcurrency(robots: .allowAll) > 1)
 }
+
+@Test func bodyRetentionStopsPastTheURLLimit() async throws {
+    // Storing the HTML of half a million pages turns a database that fits on a
+    // laptop into one that does not, which is what retainBodyURLLimit is for.
+    var config = CrawlConfig(seedURL: "https://site.test/")
+    config.workers = 1
+    config.retainBodyURLLimit = 3
+
+    let store = try await runCrawl(config: config)
+    let withBodies = try await store.dbQueue.read { db in
+        try Int.fetchOne(db, sql: "SELECT count(*) FROM responses WHERE body_gz IS NOT NULL") ?? 0
+    }
+    let total = try await store.dbQueue.read { db in
+        try Int.fetchOne(db, sql: "SELECT count(*) FROM responses WHERE status = 200") ?? 0
+    }
+    #expect(withBodies > 0, "early pages are retained")
+    #expect(withBodies < total, "retention stops once the crawl grows past the limit")
+}
+
+@Test func retainBodiesOffStoresNothing() async throws {
+    var config = CrawlConfig(seedURL: "https://site.test/")
+    config.retainBodies = false
+    let store = try await runCrawl(config: config)
+    let withBodies = try await store.dbQueue.read { db in
+        try Int.fetchOne(db, sql: "SELECT count(*) FROM responses WHERE body_gz IS NOT NULL") ?? 0
+    }
+    #expect(withBodies == 0)
+}
+
+@Test func excludePatternsKeepURLsOutOfTheCrawl() async throws {
+    var config = CrawlConfig(seedURL: "https://site.test/")
+    config.exclude = ["/dupe"]
+    let store = try await runCrawl(config: config)
+    let paths = try await store.dbQueue.read { db in
+        try String.fetchAll(db, sql: """
+            SELECT u.path FROM urls u JOIN responses r ON r.url_id = u.id
+            WHERE u.is_internal = 1 ORDER BY u.path
+            """)
+    }
+    #expect(!paths.contains("/dupe"))
+    #expect(paths.contains("/about"))
+}
+
+@Test func includePatternsRestrictTheCrawl() async throws {
+    var config = CrawlConfig(seedURL: "https://site.test/")
+    config.include = ["/about$"]
+    let store = try await runCrawl(config: config)
+    let paths = try await store.dbQueue.read { db in
+        try String.fetchAll(db, sql: """
+            SELECT u.path FROM urls u JOIN responses r ON r.url_id = u.id
+            WHERE u.is_internal = 1 ORDER BY u.path
+            """)
+    }
+    // The seed is always crawled; beyond it only matching URLs are enqueued.
+    #expect(paths == ["/", "/about"])
+}

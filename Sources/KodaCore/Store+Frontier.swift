@@ -98,6 +98,11 @@ extension Store {
         }
     }
 
+    /// Total URL rows. Cheaper than `urlCounts()` when only the total is needed.
+    public func urlTotal() throws -> Int {
+        try dbQueue.read { db in try Int.fetchOne(db, sql: "SELECT count(*) FROM urls") ?? 0 }
+    }
+
     public func urlCounts() throws -> (queued: Int, inFlight: Int, done: Int, total: Int) {
         try dbQueue.read { db in
             func count(_ state: Int) throws -> Int {

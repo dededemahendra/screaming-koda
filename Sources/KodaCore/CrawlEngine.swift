@@ -57,6 +57,12 @@ public actor CrawlEngine {
             let batch = try store.claimNext(limit: batchSize)
             if batch.isEmpty { break }
 
+            // Body retention is a size decision, not a preference: storing the HTML
+            // of half a million pages turns a database that fits on a laptop into
+            // one that does not. Re-checked per batch so a crawl that grows past
+            // the limit stops retaining rather than having to be restarted.
+            let retainBodies = try config.retainBodies && store.urlTotal() < config.retainBodyURLLimit
+
             var results: [CrawlResult] = []
             results.reserveCapacity(batch.count)
 
@@ -64,7 +70,7 @@ public actor CrawlEngine {
                 for item in batch {
                     group.addTask { [config, robots, client, parser] in
                         await Self.process(item: item, config: config, robots: robots,
-                                           client: client, parser: parser)
+                                           client: client, parser: parser, retainBodies: retainBodies)
                     }
                 }
                 for await result in group {
@@ -188,7 +194,7 @@ public actor CrawlEngine {
 
     private static func process(
         item: FrontierItem, config: CrawlConfig, robots: RobotsRules,
-        client: any HTTPClient, parser: any PageParser
+        client: any HTTPClient, parser: any PageParser, retainBodies: Bool
     ) async -> CrawlResult? {
         if config.respectRobots, !robots.isAllowed(path: item.url.path, userAgent: config.userAgent) {
             return nil
@@ -217,7 +223,7 @@ public actor CrawlEngine {
             if isHTML, let body = response.body, !body.isEmpty {
                 let html = String(decoding: body, as: UTF8.self)
                 facts = try? parser.parse(html: html)
-                if config.retainBodies { bodyGz = Gzip.compress(body) }
+                if retainBodies { bodyGz = Gzip.compress(body) }
             }
 
             return CrawlResult(
