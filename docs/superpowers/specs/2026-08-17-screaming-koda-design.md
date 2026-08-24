@@ -1,7 +1,9 @@
 # Screaming Koda — Design
 
 **Date:** 2026-08-17
-**Status:** v1 delivered 2026-08-21 (M1–M4)
+**Status:** v1 delivered 2026-08-21 (M1–M4). Superseded in scope by
+`2026-08-24-v2-feature-expansion.md`, which reverses this document's
+Screaming-Frog-parity non-goal deliberately; every other decision here still holds.
 **Scope:** v1 (milestones M1–M4)
 
 ## Purpose
@@ -309,6 +311,14 @@ implementation plan under `docs/superpowers/`.
 
 M3 was split in two once M2 landed: M3a was the crawler work the reports needed
 (external link statuses, image sizes) and M3b was the reports themselves.
+
+### After v1
+
+The scope decision below — that this would not reach Screaming Frog parity — was
+reversed in v2 against a specific 125-feature list. See
+`2026-08-24-v2-feature-expansion.md`. The architecture held: every v2 report is
+still a filtered view over `urls`, and `KodaCore` still imports no UI framework,
+including through a browser engine.
 
 ### Known deviations from this spec
 
