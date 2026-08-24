@@ -102,6 +102,8 @@ public struct PageFacts: Sendable {
     /// Characters of visible text, for the text-to-HTML ratio.
     public var textLength: Int = 0
     public var contentHash: Data = Data()
+    /// Near-duplicate fingerprint. nil for text too short to fingerprint.
+    public var simHash: Int64?
     public var ogTitle: String?
     public var ogDescription: String?
     public var ogImage: String?

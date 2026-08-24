@@ -238,6 +238,17 @@ public enum Reports {
         static let staticWords = ReportColumn(id: "staticWords", header: "Static Words",
                                               expression: "r.static_words",
                                               width: 100, alignment: .trailing)
+        static let nearDuplicates = ReportColumn(
+            id: "nearDuplicates", header: "Near Dupes",
+            expression: """
+                (SELECT count(DISTINCT f2.url_id) FROM simhash_bands mine
+                 JOIN simhash_bands theirs
+                   ON theirs.band = mine.band AND theirs.value = mine.value
+                 JOIN page_facts f2 ON f2.url_id = theirs.url_id
+                 WHERE mine.url_id = u.id AND theirs.url_id != u.id
+                   AND koda_hamming(f.simhash, f2.simhash) <= \(SimHash.nearThreshold))
+                """,
+            width: 90, alignment: .trailing)
         static let titlePixels = ReportColumn(id: "titlePixels", header: "Title px",
                                               expression: "f.title_pixels",
                                               width: 75, alignment: .trailing)
@@ -539,7 +550,7 @@ public enum Reports {
         id: "content", name: "Content",
         predicate: htmlPage,
         columns: [Col.address, Col.wordCount, Col.textLength, Col.textRatio,
-                  Col.sameContentAs, Col.contentHash, Col.title, Col.indexability],
+                  Col.sameContentAs, Col.nearDuplicates, Col.title, Col.indexability],
         filters: [
             allFilter,
             // Exact match on the hash, per the master spec's v1 position. Two
@@ -559,6 +570,29 @@ public enum Reports {
                          predicate: "coalesce(f.word_count, 0) < 50", isIssue: true),
             ReportFilter(id: "empty", name: "No content at all",
                          predicate: "coalesce(f.word_count, 0) = 0", isIssue: true),
+            // Similar but not identical: two product pages differing by a price,
+            // or a paginated series where only a heading changes. The exact-match
+            // filter above cannot see these at all.
+            //
+            // The band comparison is a prefilter, not the answer: two
+            // fingerprints within the threshold must share a band intact, so an
+            // indexed band match narrows the candidates without being able to
+            // miss a real pair, and koda_hamming then decides. Comparing every
+            // page against every other would be quadratic.
+            ReportFilter(id: "nearDuplicate", name: "Near-duplicate content", predicate: """
+                f.simhash IS NOT NULL AND EXISTS (
+                  SELECT 1 FROM simhash_bands mine
+                  JOIN simhash_bands theirs
+                    ON theirs.band = mine.band AND theirs.value = mine.value
+                  JOIN page_facts f2 ON f2.url_id = theirs.url_id
+                  JOIN urls u2 ON u2.id = f2.url_id
+                  JOIN responses r2 ON r2.url_id = f2.url_id
+                  WHERE mine.url_id = u.id AND theirs.url_id != u.id
+                    AND u2.is_internal = 1 AND r2.status = 200
+                    AND koda_hamming(f.simhash, f2.simhash) <= \(SimHash.nearThreshold)
+                    AND f2.content_hash IS NOT f.content_hash
+                )
+                """, isIssue: true),
             // Mostly markup. A low ratio is a smell rather than a verdict — a
             // heavily componentised page can be fine — but it is where bloated
             // templates and content-free pages both show up.

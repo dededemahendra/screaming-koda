@@ -146,6 +146,7 @@ public struct SwiftSoupParser: PageParser {
         facts.textLength = text.count
         facts.wordCount = text.split(whereSeparator: { $0 == " " }).count
         facts.contentHash = Data(SHA256.hash(data: Data(text.utf8)))
+        facts.simHash = SimHash.compute(text)
 
         return facts
     }

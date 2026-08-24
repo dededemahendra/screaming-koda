@@ -31,6 +31,10 @@ public final class Store: @unchecked Sendable {
     public init(path: String?) throws {
         var config = Configuration()
         config.prepareDatabase { db in
+            // SQLite has no popcount, and near-duplicate detection needs one to
+            // turn two fingerprints into a distance. Registered per connection,
+            // which is what prepareDatabase is for.
+            db.add(function: Self.hammingDistance())
             try db.execute(sql: "PRAGMA journal_mode=WAL")
             try db.execute(sql: "PRAGMA foreign_keys=ON")
             try db.execute(sql: "PRAGMA synchronous=NORMAL")
@@ -39,6 +43,21 @@ public final class Store: @unchecked Sendable {
             dbQueue = try DatabaseQueue(path: path, configuration: config)
         } else {
             dbQueue = try DatabaseQueue(configuration: config)
+        }
+    }
+
+    /// `koda_hamming(a, b)` — bits differing between two simhash fingerprints.
+    ///
+    /// Built per call rather than shared: `DatabaseFunction` is not `Sendable`,
+    /// and registration happens once per connection, so there is nothing to gain
+    /// from a shared instance and a concurrency error to avoid.
+    static func hammingDistance() -> DatabaseFunction {
+        DatabaseFunction(
+        "koda_hamming", argumentCount: 2, pure: true
+        ) { values in
+            guard let a = Int64.fromDatabaseValue(values[0]),
+                  let b = Int64.fromDatabaseValue(values[1]) else { return nil }
+            return SimHash.distance(a, b)
         }
     }
 
@@ -262,6 +281,23 @@ public final class Store: @unchecked Sendable {
             try db.execute(sql: """
                 ALTER TABLE page_facts ADD COLUMN title_pixels INTEGER;
                 ALTER TABLE page_facts ADD COLUMN meta_description_pixels INTEGER;
+                """)
+        }
+        m.registerMigration("v13-simhash") { db in
+            try db.execute(sql: """
+                ALTER TABLE page_facts ADD COLUMN simhash INTEGER;
+
+                -- Bands live in their own table rather than as one column each:
+                -- the band count is tied to the near-duplicate threshold and has
+                -- to be free to change without a migration per band, and one
+                -- composite index serves all of them.
+                CREATE TABLE simhash_bands (
+                  url_id INTEGER NOT NULL REFERENCES urls(id),
+                  band INTEGER NOT NULL,
+                  value INTEGER NOT NULL
+                );
+                CREATE INDEX idx_simhash_lookup ON simhash_bands(band, value);
+                CREATE INDEX idx_simhash_url ON simhash_bands(url_id);
                 """)
         }
         return m

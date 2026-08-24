@@ -88,10 +88,11 @@ extension Store {
                    h1, h1_count, h2, h2_count, canonical_id, canonical_count,
                    meta_robots, x_robots_tag, lang, word_count, text_length, content_hash,
                    title_pixels, meta_description_pixels,
+                   simhash,
                    og_title, og_description, og_image, og_type,
                    twitter_card, twitter_title, twitter_image,
                    amphtml, rel_prev, rel_next, analytics)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(url_id) DO UPDATE SET
                   title=excluded.title, title_length=excluded.title_length, title_count=excluded.title_count,
                   meta_description=excluded.meta_description,
@@ -104,6 +105,7 @@ extension Store {
                   x_robots_tag=excluded.x_robots_tag, lang=excluded.lang,
                   word_count=excluded.word_count, text_length=excluded.text_length,
                   content_hash=excluded.content_hash,
+                  simhash=excluded.simhash,
                   title_pixels=excluded.title_pixels,
                   meta_description_pixels=excluded.meta_description_pixels,
                   og_title=excluded.og_title, og_description=excluded.og_description,
@@ -121,6 +123,7 @@ extension Store {
                 facts.lang, facts.wordCount, facts.textLength, facts.contentHash,
                 SERPMetrics.titleWidth(facts.title).map { Int($0.rounded()) },
                 SERPMetrics.descriptionWidth(facts.metaDescription).map { Int($0.rounded()) },
+                facts.simHash,
                 facts.ogTitle, facts.ogDescription, facts.ogImage, facts.ogType,
                 facts.twitterCard, facts.twitterTitle, facts.twitterImage,
                 facts.amphtml, facts.relPrev, facts.relNext,
@@ -165,6 +168,15 @@ extension Store {
             try db.execute(
                 sql: "INSERT INTO images (url_id, src_url_id, alt, width, height) VALUES (?,?,?,?,?)",
                 arguments: [result.urlID, srcID, image.alt, image.width, image.height])
+        }
+
+        try db.execute(sql: "DELETE FROM simhash_bands WHERE url_id = ?", arguments: [result.urlID])
+        if let simHash = facts.simHash {
+            for (band, value) in SimHash.bands(simHash).enumerated() {
+                try db.execute(
+                    sql: "INSERT INTO simhash_bands (url_id, band, value) VALUES (?,?,?)",
+                    arguments: [result.urlID, band, value])
+            }
         }
 
         try db.execute(sql: "DELETE FROM resources WHERE url_id = ?", arguments: [result.urlID])

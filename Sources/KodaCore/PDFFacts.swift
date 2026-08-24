@@ -49,6 +49,7 @@ public enum PDFFacts {
         facts.textLength = text.count
         facts.wordCount = text.isEmpty ? 0 : text.split(separator: " ").count
         facts.contentHash = Data(SHA256.hash(data: Data(text.utf8)))
+        facts.simHash = SimHash.compute(text)
         return facts
     }
 }
