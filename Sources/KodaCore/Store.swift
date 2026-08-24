@@ -244,6 +244,17 @@ public final class Store: @unchecked Sendable {
                 ALTER TABLE responses ADD COLUMN perf_resources INTEGER;
                 """)
         }
+        m.registerMigration("v11-skip-reasons-and-text") { db in
+            try db.execute(sql: """
+                -- Why a URL was recorded but never crawled. Previously the state
+                -- said "skipped" and nothing said why, so a crawl that quietly
+                -- stopped short was indistinguishable from one that finished.
+                ALTER TABLE urls ADD COLUMN skip_reason TEXT;
+                -- Characters of visible text, so the text-to-HTML ratio is a real
+                -- measurement rather than word count divided by byte count.
+                ALTER TABLE page_facts ADD COLUMN text_length INTEGER;
+                """)
+        }
         return m
     }
 

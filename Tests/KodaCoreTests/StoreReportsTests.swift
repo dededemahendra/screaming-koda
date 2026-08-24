@@ -52,8 +52,20 @@ private func ids(_ store: Store, _ filter: String = "all",
     let store = try ReportFixture.make()
     for ascending in [true, false] {
         let sorted = try ids(store, sortBy: statusColumn, ascending: ascending)
-        let last = try ReportFixture.paths(store, [sorted.last!])
-        #expect(last == ["/queued"], "nulls should be last when ascending == \(ascending)")
+        // Asserted on null-ness rather than on one named row: several fixture
+        // pages now have no response, and which of them sorts last is decided by
+        // the id tie-break, not by the rule under test.
+        let lastStatus = try store.dbQueue.read { db in
+            try Int.fetchOne(db, sql: "SELECT status FROM responses WHERE url_id = ?",
+                             arguments: [sorted.last!])
+        }
+        #expect(lastStatus == nil, "nulls should be last when ascending == \(ascending)")
+
+        let firstStatus = try store.dbQueue.read { db in
+            try Int.fetchOne(db, sql: "SELECT status FROM responses WHERE url_id = ?",
+                             arguments: [sorted.first!])
+        }
+        #expect(firstStatus != nil, "and a real value should be first")
     }
 }
 

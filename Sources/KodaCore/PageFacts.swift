@@ -99,6 +99,8 @@ public struct PageFacts: Sendable {
     public var metaRobots: String?
     public var lang: String?
     public var wordCount: Int = 0
+    /// Characters of visible text, for the text-to-HTML ratio.
+    public var textLength: Int = 0
     public var contentHash: Data = Data()
     public var ogTitle: String?
     public var ogDescription: String?

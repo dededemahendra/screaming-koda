@@ -143,6 +143,7 @@ public struct SwiftSoupParser: PageParser {
         facts.analytics = try Self.analytics(doc)
 
         let text = try Self.visibleText(doc)
+        facts.textLength = text.count
         facts.wordCount = text.split(whereSeparator: { $0 == " " }).count
         facts.contentHash = Data(SHA256.hash(data: Data(text.utf8)))
 

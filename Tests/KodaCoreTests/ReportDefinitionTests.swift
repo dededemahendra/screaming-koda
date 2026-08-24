@@ -85,7 +85,7 @@ private func rows(_ store: Store, _ report: Report, _ filterID: String) throws -
         "internal", "external", "responseCodes", "titles", "metaDescription", "headings",
         "images", "canonicals", "directives", "hreflang", "pageDepth",
         "content", "urls", "anchorText",
-        "social", "structuredData", "pagination", "security", "extraction", "sitemap", "resources", "javascript", "performance",
+        "social", "structuredData", "pagination", "security", "extraction", "sitemap", "resources", "javascript", "performance", "crawlability",
     ])
 }
 
@@ -234,7 +234,8 @@ private func rows(_ store: Store, _ report: Report, _ filterID: String) throws -
 
 @Test func urlReportFindsAwkwardURLShapes() throws {
     let store = try ReportFixture.make()
-    #expect(try rows(store, Reports.urlStructure, "insecure") == ["/insecure"])
+    // /both is the unfinished-migration case and is also served over http.
+    #expect(try rows(store, Reports.urlStructure, "insecure") == ["/insecure", "/both"])
     #expect(try rows(store, Reports.urlStructure, "uppercase") == ["/Upper/Case"])
     #expect(try rows(store, Reports.urlStructure, "underscore") == ["/has_underscore"])
     #expect(try rows(store, Reports.urlStructure, "encoded") == ["/percent%20encoded"])
@@ -397,4 +398,49 @@ private func rows(_ store: Store, _ report: Report, _ filterID: String) throws -
         for: Reports.images,
         filter: Reports.images.filters.first { $0.id == "noDimensions" }!,
         sortBy: nil, ascending: true)) == ["/img/big.png"])
+}
+
+// MARK: - Wave 6 reports
+
+@Test func urlReportFindsTrackingAndSessionParameters() throws {
+    let store = try ReportFixture.make()
+    // `paths` reads urls.path, which is the path alone — the query lives in the
+    // URL, exactly as a real crawl stores it.
+    #expect(try rows(store, Reports.urlStructure, "trackingParams") == ["/tracked"])
+    #expect(try rows(store, Reports.urlStructure, "sessionParams") == ["/session"])
+    #expect(try rows(store, Reports.urlStructure, "manyParams") == ["/many"])
+}
+
+/// The pair that says an HTTPS migration is unfinished: the same path reachable
+/// on both schemes.
+@Test func urlReportFindsAnUnfinishedHTTPSMigration() throws {
+    let store = try ReportFixture.make()
+    #expect(try rows(store, Reports.urlStructure, "httpWithHTTPSTwin") == ["/both"])
+}
+
+@Test func securityReportReadsCookieFlagsFromStoredHeaders() throws {
+    let store = try ReportFixture.make()
+    #expect(try rows(store, Reports.security, "setsCookies")
+            == ["/cookie-strict", "/cookie-loose"])
+    #expect(try rows(store, Reports.security, "cookieNoSecure") == ["/cookie-loose"])
+    #expect(try rows(store, Reports.security, "cookieNoHttpOnly") == ["/cookie-loose"])
+    #expect(try rows(store, Reports.security, "cookieNoSameSite") == ["/cookie-loose"])
+}
+
+@Test func contentReportFindsPagesThatAreMostlyMarkup() throws {
+    let store = try ReportFixture.make()
+    #expect(try rows(store, Reports.content, "lowTextRatio") == ["/mostly-markup"])
+}
+
+/// Before skip reasons existed, a row said "skipped" and nothing said why — so a
+/// crawl that quietly stopped short looked exactly like one that had finished.
+@Test func crawlabilityReportSaysWhyEachURLWasNotCrawled() throws {
+    let store = try ReportFixture.make()
+    #expect(try rows(store, Reports.crawlability, "robots") == ["/robots-blocked"])
+    #expect(try rows(store, Reports.crawlability, "depth") == ["/too-deep"])
+    #expect(try rows(store, Reports.crawlability, "cap") == ["/over-cap"])
+
+    let all = try rows(store, Reports.crawlability, "all")
+    #expect(all.isSuperset(of: ["/robots-blocked", "/too-deep", "/over-cap"]))
+    #expect(!all.contains("/"), "a crawled page is not in the crawlability tab")
 }

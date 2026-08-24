@@ -86,11 +86,11 @@ extension Store {
                   (url_id, title, title_length, title_count,
                    meta_description, meta_description_length, meta_description_count,
                    h1, h1_count, h2, h2_count, canonical_id, canonical_count,
-                   meta_robots, x_robots_tag, lang, word_count, content_hash,
+                   meta_robots, x_robots_tag, lang, word_count, text_length, content_hash,
                    og_title, og_description, og_image, og_type,
                    twitter_card, twitter_title, twitter_image,
                    amphtml, rel_prev, rel_next, analytics)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(url_id) DO UPDATE SET
                   title=excluded.title, title_length=excluded.title_length, title_count=excluded.title_count,
                   meta_description=excluded.meta_description,
@@ -101,7 +101,8 @@ extension Store {
                   canonical_id=excluded.canonical_id, canonical_count=excluded.canonical_count,
                   meta_robots=excluded.meta_robots,
                   x_robots_tag=excluded.x_robots_tag, lang=excluded.lang,
-                  word_count=excluded.word_count, content_hash=excluded.content_hash,
+                  word_count=excluded.word_count, text_length=excluded.text_length,
+                  content_hash=excluded.content_hash,
                   og_title=excluded.og_title, og_description=excluded.og_description,
                   og_image=excluded.og_image, og_type=excluded.og_type,
                   twitter_card=excluded.twitter_card, twitter_title=excluded.twitter_title,
@@ -114,7 +115,7 @@ extension Store {
                 facts.metaDescription, facts.metaDescriptionLength, facts.metaDescriptionCount,
                 facts.h1, facts.h1Count, facts.h2, facts.h2Count,
                 canonicalID, facts.canonicalCount, facts.metaRobots, result.xRobotsTag,
-                facts.lang, facts.wordCount, facts.contentHash,
+                facts.lang, facts.wordCount, facts.textLength, facts.contentHash,
                 facts.ogTitle, facts.ogDescription, facts.ogImage, facts.ogType,
                 facts.twitterCard, facts.twitterTitle, facts.twitterImage,
                 facts.amphtml, facts.relPrev, facts.relNext,
@@ -248,25 +249,36 @@ extension Store {
         let depth = parentDepth + 1
 
         var shouldQueue = enqueue
-        if shouldQueue, let maxDepth = config.maxDepth, depth > maxDepth { shouldQueue = false }
-        if shouldQueue, !passesFilters(url, config: config) { shouldQueue = false }
-        if shouldQueue, redirectHops > config.maxRedirects { shouldQueue = false }
+        // Recorded alongside the decision rather than inferred later: a crawl
+        // that quietly stopped short used to be indistinguishable from one that
+        // finished, because the row said "skipped" and nothing said why.
+        var skipReason: String? = enqueue ? nil : (internalFlag ? "not followed" : "external")
+        if shouldQueue, let maxDepth = config.maxDepth, depth > maxDepth {
+            shouldQueue = false; skipReason = "beyond max depth"
+        }
+        if shouldQueue, !passesFilters(url, config: config) {
+            shouldQueue = false; skipReason = "excluded by URL filters"
+        }
+        if shouldQueue, redirectHops > config.maxRedirects {
+            shouldQueue = false; skipReason = "redirect chain too long"
+        }
         if shouldQueue {
             // Only rows that still count against crawl budget — queued, in-flight, or done.
             // Skipped rows (state 3) are external links, images, and filtered targets that
             // will never be crawled, so they must not starve internal discovery of budget.
             let total = try Int.fetchOne(db, sql: "SELECT count(*) FROM urls WHERE state != 3") ?? 0
-            if total >= config.urlCap { shouldQueue = false }
+            if total >= config.urlCap { shouldQueue = false; skipReason = "URL cap reached" }
         }
 
         try db.execute(
             sql: """
-                INSERT INTO urls (url, url_hash, host, path, depth, is_internal, discovered_at, state, redirect_hops, check_only)
-                VALUES (?,?,?,?,?,?,?,?,?,?)
+                INSERT INTO urls (url, url_hash, host, path, depth, is_internal, discovered_at,
+                                  state, redirect_hops, check_only, skip_reason)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
                 """,
             arguments: [url.absoluteString, url.sha256, url.host, url.path, depth,
                         internalFlag ? 1 : 0, now.timeIntervalSince1970, shouldQueue ? 0 : 3, redirectHops,
-                        checkOnly ? 1 : 0]
+                        checkOnly ? 1 : 0, shouldQueue ? nil : skipReason]
         )
         if shouldQueue { discovered += 1 }
         return db.lastInsertedRowID

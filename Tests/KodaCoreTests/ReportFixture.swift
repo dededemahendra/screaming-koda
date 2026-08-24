@@ -45,6 +45,11 @@ enum ReportFixture {
         /// Full URL, when the page is not `https://fx.test` + path — used for the
         /// http/https and www/non-www cases.
         var absoluteURL: String? = nil
+        /// The path component alone. Set when it differs from `path`, which
+        /// doubles as the fixture's identity key — a real `NormalizedURL.path`
+        /// never contains the query string, so a parameterised page must not
+        /// pretend otherwise or every path filter sees the query too.
+        var pathOnly: String? = nil
         var hostOverride: String? = nil
         var ogTitle: String? = nil
         var ogImage: String? = nil
@@ -65,6 +70,11 @@ enum ReportFixture {
         ]
         var imageWidth: Int? = 100
         var imageHeight: Int? = 80
+        var textLength: Int? = 2000
+        /// Set for a URL recorded but never fetched, so the Crawlability report
+        /// has something to explain.
+        var skipReason: String? = nil
+        var state: Int? = nil
     }
 
     /// Titles of an exact length, so the over-60 / under-30 filters are tested
@@ -171,7 +181,7 @@ enum ReportFixture {
         // URL shape.
         Page(path: "/Upper/Case"),
         Page(path: "/has_underscore"),
-        Page(path: "/percent%20encoded"),
+        Page(path: "/percent%20encoded", pathOnly: "/percent%20encoded"),
         // Explicit text, because the auto values are derived from the path and
         // this path is long enough that they would trip the title and H1 length
         // filters — making this page a false positive in two other reports.
@@ -216,6 +226,35 @@ enum ReportFixture {
         // Tracking and headers.
         Page(path: "/no-tracking", analytics: nil),
         Page(path: "/no-security-headers", headers: ["Content-Type": "text/html"]),
+
+        // Cookies.
+        Page(path: "/cookie-strict",
+             headers: ["Content-Type": "text/html",
+                       "Set-Cookie": "id=1; Secure; HttpOnly; SameSite=Strict"]),
+        Page(path: "/cookie-loose", headers: ["Content-Type": "text/html", "Set-Cookie": "id=2"]),
+
+        // URL parameters. `pathOnly` is what a real crawl would store.
+        Page(path: "/tracked?utm_source=news",
+             absoluteURL: "https://fx.test/tracked?utm_source=news", pathOnly: "/tracked"),
+        Page(path: "/session?PHPSESSID=abc123",
+             absoluteURL: "https://fx.test/session?PHPSESSID=abc123", pathOnly: "/session"),
+        Page(path: "/many?a=1&b=2&c=3",
+             absoluteURL: "https://fx.test/many?a=1&b=2&c=3", pathOnly: "/many"),
+
+        // An unfinished HTTPS migration: both forms exist.
+        Page(path: "/both", absoluteURL: "http://fx.test/both"),
+        Page(path: "/both-https", absoluteURL: "https://fx.test/both"),
+
+        // Thin markup: lots of bytes, almost no text.
+        Page(path: "/mostly-markup", contentLength: 50_000, textLength: 300),
+
+        // Recorded but never fetched, each for a different reason.
+        Page(path: "/robots-blocked", status: nil, contentType: nil, contentLength: nil,
+             hasFacts: false, skipReason: "blocked by robots.txt", state: 3),
+        Page(path: "/too-deep", status: nil, contentType: nil, contentLength: nil,
+             depth: 9, hasFacts: false, skipReason: "beyond max depth", state: 3),
+        Page(path: "/over-cap", status: nil, contentType: nil, contentLength: nil,
+             hasFacts: false, skipReason: "URL cap reached", state: 3),
     ]
 
     static let external: [Page] = [
@@ -250,14 +289,14 @@ enum ReportFixture {
                 try db.execute(
                     sql: """
                         INSERT INTO urls (url, url_hash, host, path, depth, is_internal,
-                                          discovered_at, state, redirect_hops, check_only)
-                        VALUES (?,?,?,?,?,?,0,?,?,?)
+                                          discovered_at, state, redirect_hops, check_only, skip_reason)
+                        VALUES (?,?,?,?,?,?,0,?,?,?,?)
                         """,
                     arguments: [url, Data(url.utf8),
                                 page.hostOverride ?? (page.isInternal ? "fx.test" : "ext.test"),
-                                page.path, page.depth, page.isInternal ? 1 : 0,
-                                page.status == nil ? 0 : 2, page.redirectHops,
-                                page.checkOnly ? 1 : 0])
+                                page.pathOnly ?? page.path, page.depth, page.isInternal ? 1 : 0,
+                                page.state ?? (page.status == nil ? 0 : 2), page.redirectHops,
+                                page.checkOnly ? 1 : 0, page.skipReason])
                 ids[page.path] = db.lastInsertedRowID
             }
 
@@ -289,15 +328,15 @@ enum ReportFixture {
                           (url_id, title, title_length, title_count,
                            meta_description, meta_description_length, meta_description_count,
                            h1, h1_count, h2, h2_count, canonical_id, canonical_count,
-                           meta_robots, x_robots_tag, lang, word_count, content_hash,
+                           meta_robots, x_robots_tag, lang, word_count, text_length, content_hash,
                            og_title, og_image, twitter_card, amphtml, rel_prev, rel_next, analytics)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'en',?,?,?,?,?,?,?,?,?)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'en',?,?,?,?,?,?,?,?,?,?)
                         """,
                     arguments: [id, title, title?.count, page.titleCount,
                                 desc, desc?.count, page.descCount,
                                 h1, page.h1Count, h2, page.h2Count, canonical,
                                 page.canonicalTo == nil ? 0 : page.canonicalCount,
-                                page.metaRobots, page.xRobots, page.wordCount,
+                                page.metaRobots, page.xRobots, page.wordCount, page.textLength,
                                 Data((page.contentKey ?? page.path).utf8),
                                 page.ogTitle, page.ogImage, page.twitterCard, page.amphtml,
                                 page.relPrev, page.relNext, page.analytics])

@@ -97,8 +97,14 @@ extension Store {
         try dbQueue.write { db in try Self.setState(db, id: id, state: 2) }
     }
 
-    public func markSkipped(_ id: Int64) throws {
-        try dbQueue.write { db in try Self.setState(db, id: id, state: 3) }
+    /// - Parameter reason: why, so the Crawlability report can say something
+    ///   more useful than "not crawled".
+    public func markSkipped(_ id: Int64, reason: String = "blocked by robots.txt") throws {
+        try dbQueue.write { db in
+            try Self.setState(db, id: id, state: 3)
+            try db.execute(sql: "UPDATE urls SET skip_reason = ? WHERE id = ?",
+                           arguments: [reason, id])
+        }
     }
 
     static func setState(_ db: Database, id: Int64, state: Int) throws {

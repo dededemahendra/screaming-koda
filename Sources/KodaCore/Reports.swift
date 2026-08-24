@@ -238,6 +238,28 @@ public enum Reports {
         static let staticWords = ReportColumn(id: "staticWords", header: "Static Words",
                                               expression: "r.static_words",
                                               width: 100, alignment: .trailing)
+        static let query = ReportColumn(
+            id: "query", header: "Query String",
+            expression: """
+                CASE WHEN instr(u.url, '?') > 0
+                     THEN substr(u.url, instr(u.url, '?') + 1) END
+                """,
+            width: 240)
+        static let setCookie = ReportColumn(
+            id: "setCookie", header: "Set-Cookie",
+            expression: "json_extract(r.headers_json, '$.\"Set-Cookie\"')", width: 320)
+        static let skipReason = ReportColumn(id: "skipReason", header: "Why Not Crawled",
+                                             expression: "u.skip_reason", width: 200)
+        static let textRatio = ReportColumn(
+            id: "textRatio", header: "Text %",
+            expression: """
+                CASE WHEN coalesce(r.content_length, 0) > 0 AND f.text_length IS NOT NULL
+                     THEN round(100.0 * f.text_length / r.content_length, 1) END
+                """,
+            width: 65, alignment: .trailing)
+        static let textLength = ReportColumn(id: "textLength", header: "Text Chars",
+                                             expression: "f.text_length",
+                                             width: 85, alignment: .trailing)
         static let ttfb = ReportColumn(id: "ttfb", header: "TTFB ms",
                                        expression: "r.perf_ttfb_ms", width: 75, alignment: .trailing)
         static let fcp = ReportColumn(id: "fcp", header: "FCP ms",
@@ -271,7 +293,7 @@ public enum Reports {
         images, canonicals, directives, hreflang, pageDepth,
         content, urlStructure, anchorText,
         social, structuredData, pagination, security, extraction, sitemap, resources,
-        javascript, performance,
+        javascript, performance, crawlability,
     ]
 
     public static let internalURLs = Report(
@@ -501,8 +523,8 @@ public enum Reports {
     public static let content = Report(
         id: "content", name: "Content",
         predicate: htmlPage,
-        columns: [Col.address, Col.wordCount, Col.sameContentAs, Col.contentHash,
-                  Col.title, Col.indexability],
+        columns: [Col.address, Col.wordCount, Col.textLength, Col.textRatio,
+                  Col.sameContentAs, Col.contentHash, Col.title, Col.indexability],
         filters: [
             allFilter,
             // Exact match on the hash, per the master spec's v1 position. Two
@@ -522,6 +544,13 @@ public enum Reports {
                          predicate: "coalesce(f.word_count, 0) < 50", isIssue: true),
             ReportFilter(id: "empty", name: "No content at all",
                          predicate: "coalesce(f.word_count, 0) = 0", isIssue: true),
+            // Mostly markup. A low ratio is a smell rather than a verdict — a
+            // heavily componentised page can be fine — but it is where bloated
+            // templates and content-free pages both show up.
+            ReportFilter(id: "lowTextRatio", name: "Under 10% text", predicate: """
+                coalesce(r.content_length, 0) > 0 AND f.text_length IS NOT NULL
+                AND (100.0 * f.text_length / r.content_length) < 10
+                """, isIssue: true),
         ])
 
     /// The shape of the URLs themselves, which is where a surprising share of
@@ -529,7 +558,7 @@ public enum Reports {
     public static let urlStructure = Report(
         id: "urls", name: "URLs",
         predicate: "u.is_internal = 1 AND \(pageRows)",
-        columns: [Col.address, Col.urlLength, Col.scheme, Col.status,
+        columns: [Col.address, Col.urlLength, Col.scheme, Col.query, Col.status,
                   Col.indexability, Col.depth],
         filters: [
             allFilter,
@@ -544,6 +573,36 @@ public enum Reports {
                 """, isIssue: true),
             ReportFilter(id: "params", name: "Contains parameters",
                          predicate: "u.url LIKE '%?%'"),
+            // Tracking parameters create an endless supply of distinct URLs for
+            // the same page, which is where crawl budget and duplicate content
+            // problems usually start.
+            ReportFilter(id: "trackingParams", name: "Tracking parameters", predicate: """
+                lower(u.url) LIKE '%utm\\_%' ESCAPE '\\' OR lower(u.url) LIKE '%gclid=%'
+                OR lower(u.url) LIKE '%fbclid=%' OR lower(u.url) LIKE '%mc\\_cid=%' ESCAPE '\\'
+                OR lower(u.url) LIKE '%msclkid=%'
+                """, isIssue: true),
+            ReportFilter(id: "sessionParams", name: "Session parameters", predicate: """
+                lower(u.url) LIKE '%sessionid=%' OR lower(u.url) LIKE '%phpsessid=%'
+                OR lower(u.url) LIKE '%jsessionid=%' OR lower(u.url) LIKE '%?sid=%'
+                OR lower(u.url) LIKE '%&sid=%'
+                """, isIssue: true),
+            ReportFilter(id: "manyParams", name: "Three or more parameters", predicate: """
+                length(u.url) - length(replace(u.url, '&', '')) >= 2 AND u.url LIKE '%?%'
+                """, isIssue: true),
+            // The pair that says a migration is unfinished: an http URL whose
+            // https twin the crawl also found.
+            ReportFilter(id: "httpWithHTTPSTwin", name: "HTTP page that also exists on HTTPS",
+                         predicate: """
+                u.url LIKE 'http://%' AND EXISTS (
+                  SELECT 1 FROM urls u2
+                  WHERE u2.url = 'https://' || substr(u.url, 8)
+                )
+                """, isIssue: true),
+            ReportFilter(id: "httpNoRedirect", name: "HTTP page that does not redirect",
+                         predicate: """
+                u.url LIKE 'http://%' AND r.status IS NOT NULL
+                AND (r.status < 300 OR r.status >= 400)
+                """, isIssue: true),
             ReportFilter(id: "long", name: "Over 115 characters",
                          predicate: "length(u.url) > 115", isIssue: true),
             // Uppercase in a path is a duplicate-content risk because most
@@ -676,7 +735,8 @@ public enum Reports {
     public static let security = Report(
         id: "security", name: "Security",
         predicate: "u.is_internal = 1 AND r.status IS NOT NULL AND \(pageRows)",
-        columns: [Col.address, Col.status, Col.scheme, Col.contentType, Col.indexability],
+        columns: [Col.address, Col.status, Col.scheme, Col.contentType,
+                  Col.setCookie, Col.indexability],
         filters: [
             allFilter,
             ReportFilter(id: "noHSTS", name: "No HSTS",
@@ -691,6 +751,27 @@ public enum Reports {
                          predicate: missingHeader("referrer-policy"), isIssue: true),
             ReportFilter(id: "insecure", name: "Served over HTTP",
                          predicate: "u.url NOT LIKE 'https://%'", isIssue: true),
+            // Cookie flags, read from the stored headers.
+            //
+            // A caveat worth knowing: URLSession collapses repeated Set-Cookie
+            // headers into one comma-joined value, so a response setting three
+            // cookies arrives as one string. These filters therefore answer "is
+            // any cookie missing this flag", which is the useful question, but
+            // cannot say which one.
+            ReportFilter(id: "setsCookies", name: "Sets cookies",
+                         predicate: "json_extract(r.headers_json, '$.\"Set-Cookie\"') IS NOT NULL"),
+            ReportFilter(id: "cookieNoSecure", name: "Cookie without Secure", predicate: """
+                json_extract(r.headers_json, '$."Set-Cookie"') IS NOT NULL
+                AND lower(json_extract(r.headers_json, '$."Set-Cookie"')) NOT LIKE '%secure%'
+                """, isIssue: true),
+            ReportFilter(id: "cookieNoHttpOnly", name: "Cookie without HttpOnly", predicate: """
+                json_extract(r.headers_json, '$."Set-Cookie"') IS NOT NULL
+                AND lower(json_extract(r.headers_json, '$."Set-Cookie"')) NOT LIKE '%httponly%'
+                """, isIssue: true),
+            ReportFilter(id: "cookieNoSameSite", name: "Cookie without SameSite", predicate: """
+                json_extract(r.headers_json, '$."Set-Cookie"') IS NOT NULL
+                AND lower(json_extract(r.headers_json, '$."Set-Cookie"')) NOT LIKE '%samesite%'
+                """, isIssue: true),
         ])
 
     /// Whatever the crawl was configured to pull out of each page.
@@ -841,6 +922,34 @@ public enum Reports {
                          predicate: "r.perf_resources > 50", isIssue: true),
             ReportFilter(id: "noMetrics", name: "No timings reported",
                          predicate: "r.perf_ttfb_ms IS NULL AND r.perf_fcp_ms IS NULL"),
+        ])
+
+    /// URLs the crawl recorded but never fetched, and why.
+    ///
+    /// The reason is written at the moment the decision is made rather than
+    /// inferred afterwards: before this, a row said "skipped" and nothing said
+    /// why, so a crawl that quietly stopped short — a URL cap hit, a filter too
+    /// broad, a depth limit — looked exactly like one that had finished.
+    public static let crawlability = Report(
+        id: "crawlability", name: "Crawlability",
+        predicate: "u.state = 3 AND u.check_only = 0",
+        columns: [Col.address, Col.skipReason, Col.depth, Col.inlinks, Col.inSitemap],
+        filters: [
+            allFilter,
+            ReportFilter(id: "robots", name: "Blocked by robots.txt",
+                         predicate: "u.skip_reason = 'blocked by robots.txt'", isIssue: true),
+            ReportFilter(id: "filters", name: "Excluded by URL filters",
+                         predicate: "u.skip_reason = 'excluded by URL filters'"),
+            ReportFilter(id: "depth", name: "Beyond max depth",
+                         predicate: "u.skip_reason = 'beyond max depth'"),
+            ReportFilter(id: "cap", name: "URL cap reached",
+                         predicate: "u.skip_reason = 'URL cap reached'", isIssue: true),
+            ReportFilter(id: "redirects", name: "Redirect chain too long",
+                         predicate: "u.skip_reason = 'redirect chain too long'", isIssue: true),
+            // A URL the sitemap declares that the crawl then refused to fetch is
+            // the site contradicting itself twice over.
+            ReportFilter(id: "sitemapBlocked", name: "In the sitemap but not crawlable",
+                         predicate: "u.in_sitemap = 1", isIssue: true),
         ])
 
     public static let pageDepth = Report(
