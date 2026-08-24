@@ -78,6 +78,42 @@ public struct CrawlConfig: Codable, Sendable {
     /// mean a second engine for a strictly smaller audience.
     public var extractions: [ExtractionRule] = []
 
+    /// HTTP Basic credentials, applied to every request to the seed host.
+    ///
+    /// Stored in the crawl's config JSON, which means they are written to the
+    /// `.koda` file in plain text. That is a deliberate limit rather than an
+    /// oversight: this is a local tool for sites you control, and a keychain
+    /// round trip per crawl would be security theatre while the crawl database
+    /// itself sits unencrypted next to it. Do not point it at credentials that
+    /// matter beyond the site being crawled.
+    public var basicAuthUser: String = ""
+    public var basicAuthPassword: String = ""
+
+    /// Extra request headers, for token auth, a staging bypass header, or
+    /// anything else a protected environment needs.
+    public var extraHeaders: [String: String] = [:]
+
+    /// Whether any authentication is configured at all.
+    public var hasCredentials: Bool {
+        !basicAuthUser.isEmpty || !extraHeaders.isEmpty
+    }
+
+    /// The headers every request carries: the configured extras, plus a Basic
+    /// `Authorization` header when credentials are set.
+    ///
+    /// Built here rather than at each call site so the engine, the robots fetch
+    /// and the sitemap fetch cannot drift — a crawl that authenticates its pages
+    /// but not its robots.txt reads as "disallow all" and produces nothing.
+    public var requestHeaders: [String: String] {
+        var out = extraHeaders
+        if !basicAuthUser.isEmpty {
+            let pair = "\(basicAuthUser):\(basicAuthPassword)"
+            let encoded = Data(pair.utf8).base64EncodedString()
+            out["Authorization"] = "Basic \(encoded)"
+        }
+        return out
+    }
+
     /// Sitemaps to seed the crawl from, beyond any that robots.txt announces.
     public var sitemapURLs: [String] = []
     /// Follow `Sitemap:` directives in robots.txt. On by default: it is where

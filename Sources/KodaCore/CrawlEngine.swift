@@ -177,14 +177,16 @@ public actor CrawlEngine {
         item: FrontierItem, config: CrawlConfig, client: HTTPClient
     ) async -> CrawlResult {
         var outcome = await client.fetch(url: item.url.absoluteString, method: "HEAD",
-                                         userAgent: config.userAgent, timeout: config.timeout)
+                                         userAgent: config.userAgent, timeout: config.timeout,
+                                         headers: config.requestHeaders)
 
         // 405 and 501 are the two codes that actually mean "this server does not do
         // HEAD". Retrying on any other 4xx would double our traffic on ordinary 404s.
         var usedGETFallback = false
         if case .response(let head) = outcome, head.status == 405 || head.status == 501 {
             outcome = await client.fetch(url: item.url.absoluteString, method: "GET",
-                                         userAgent: config.userAgent, timeout: config.timeout)
+                                         userAgent: config.userAgent, timeout: config.timeout,
+                                         headers: config.requestHeaders)
             usedGETFallback = true
         }
 
@@ -238,7 +240,8 @@ public actor CrawlEngine {
         }
 
         let outcome = await client.fetch(url: item.url.absoluteString, method: "GET",
-                                         userAgent: config.userAgent, timeout: config.timeout)
+                                         userAgent: config.userAgent, timeout: config.timeout,
+                                         headers: config.requestHeaders)
 
         switch outcome {
         case .failure(let kind):

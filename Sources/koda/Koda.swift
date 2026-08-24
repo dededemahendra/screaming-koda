@@ -46,6 +46,15 @@ struct Crawl: AsyncParsableCommand {
     @Flag(name: .long, help: "Status-check stylesheets and scripts too.")
     var checkResources = false
 
+    @Option(name: .long, help: "HTTP Basic user for a protected site.")
+    var user: String?
+
+    @Option(name: .long, help: "HTTP Basic password.")
+    var password: String?
+
+    @Option(name: .long, help: "Extra request header as Name:Value. Repeatable.")
+    var header: [String] = []
+
     mutating func run() async throws {
         var config = CrawlConfig(seedURL: url)
         config.workers = workers
@@ -56,6 +65,19 @@ struct Crawl: AsyncParsableCommand {
         config.discoverSitemaps = !noSitemapDiscovery
         config.listModeOnly = listMode
         config.checkResources = checkResources
+        config.basicAuthUser = user ?? ""
+        config.basicAuthPassword = password ?? ""
+        for entry in header {
+            // Split on the first colon only: header values legitimately contain
+            // colons, as any URL-valued header does.
+            guard let split = entry.firstIndex(of: ":") else {
+                throw ValidationError("Header must be Name:Value, not \(entry)")
+            }
+            let name = String(entry[..<split]).trimmingCharacters(in: .whitespaces)
+            let value = String(entry[entry.index(after: split)...]).trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else { throw ValidationError("Header name is empty in \(entry)") }
+            config.extraHeaders[name] = value
+        }
 
         guard let host = config.seedHost else {
             throw ValidationError("Not a crawlable http(s) URL: \(url)")

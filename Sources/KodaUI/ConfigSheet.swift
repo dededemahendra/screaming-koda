@@ -11,6 +11,7 @@ public struct ConfigSheet: View {
     @State private var includeText: String
     @State private var excludeText: String
     @State private var sitemapText: String
+    @State private var headerText: String
     private let onApply: (CrawlConfig) -> Void
     private let onCancel: () -> Void
 
@@ -21,6 +22,10 @@ public struct ConfigSheet: View {
         _includeText = State(initialValue: config.include.joined(separator: "\n"))
         _excludeText = State(initialValue: config.exclude.joined(separator: "\n"))
         _sitemapText = State(initialValue: config.sitemapURLs.joined(separator: "\n"))
+        _headerText = State(initialValue: config.extraHeaders
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key): \($0.value)" }
+            .joined(separator: "\n"))
         self.onApply = onApply
         self.onCancel = onCancel
     }
@@ -30,6 +35,12 @@ public struct ConfigSheet: View {
         out.include = patterns(includeText)
         out.exclude = patterns(excludeText)
         out.sitemapURLs = patterns(sitemapText)
+        out.extraHeaders = Dictionary(uniqueKeysWithValues: patterns(headerText).compactMap { line in
+            guard let split = line.firstIndex(of: ":") else { return nil }
+            let name = String(line[..<split]).trimmingCharacters(in: .whitespaces)
+            let value = String(line[line.index(after: split)...]).trimmingCharacters(in: .whitespaces)
+            return name.isEmpty ? nil : (name, value)
+        })
         return CrawlSettings.clamped(out)
     }
 
@@ -87,6 +98,19 @@ public struct ConfigSheet: View {
                     Toggle("Status-check images", isOn: $draft.checkImages)
                     Toggle("Status-check stylesheets and scripts", isOn: $draft.checkResources)
                     Toggle("Retain page bodies", isOn: $draft.retainBodies)
+                }
+                Section("Authentication") {
+                    Text("Stored in the crawl's config, in plain text, next to an "
+                         + "unencrypted database. For sites you control.")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    TextField("Username", text: $draft.basicAuthUser)
+                    SecureField("Password", text: $draft.basicAuthPassword)
+                    LabeledContent("Extra headers") {
+                        TextEditor(text: $headerText).font(.body.monospaced()).frame(height: 44)
+                    }
+                    Text("One per line, as Name: Value.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("URL filters") {
                     Text("One regular expression per line. Include, when non-empty, "

@@ -34,7 +34,19 @@ public enum FetchOutcome: Sendable {
 
 public protocol HTTPClient: Sendable {
     func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome
+
+    /// Same, with extra request headers. Default-implemented by ignoring them,
+    /// so every existing client and test keeps compiling unchanged.
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval,
+               headers: [String: String]) async -> FetchOutcome
 }
+extension HTTPClient {
+    public func fetch(url: String, method: String, userAgent: String,
+                      timeout: TimeInterval, headers: [String: String]) async -> FetchOutcome {
+        await fetch(url: url, method: method, userAgent: userAgent, timeout: timeout)
+    }
+}
+
 
 /// Maps `URLError.Code` to a stable, human-readable name.
 ///
@@ -102,13 +114,22 @@ public struct URLSessionHTTPClient: HTTPClient {
         }
     }
 
-    public func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
+    public func fetch(url: String, method: String, userAgent: String,
+                      timeout: TimeInterval) async -> FetchOutcome {
+        await fetch(url: url, method: method, userAgent: userAgent, timeout: timeout, headers: [:])
+    }
+
+    public func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval,
+                      headers: [String: String]) async -> FetchOutcome {
         guard let parsed = URL(string: url), parsed.host != nil else {
             return .failure(kind: "invalidURL")
         }
         var request = URLRequest(url: parsed, timeoutInterval: timeout)
         request.httpMethod = method
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        // Caller-supplied headers last, so a configured Authorization or
+        // User-Agent override actually overrides.
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         request.setValue("text/html,application/xhtml+xml,*/*;q=0.8", forHTTPHeaderField: "Accept")
 
         let start = DispatchTime.now().uptimeNanoseconds

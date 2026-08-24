@@ -79,7 +79,8 @@ public enum CrawlSession {
         var currentURL = robotsURL
         for hop in 0...robotsRedirectHopLimit {
             let outcome = await client.fetch(url: currentURL.absoluteString, method: "GET",
-                                             userAgent: config.userAgent, timeout: config.timeout)
+                                             userAgent: config.userAgent, timeout: config.timeout,
+                                         headers: config.requestHeaders)
             switch outcome {
             case .response(let response):
                 if response.status == 200, let body = response.body {
@@ -137,7 +138,8 @@ public enum CrawlSession {
             fetched += 1
 
             let outcome = await client.fetch(url: next, method: "GET",
-                                             userAgent: config.userAgent, timeout: config.timeout)
+                                             userAgent: config.userAgent, timeout: config.timeout,
+                                         headers: config.requestHeaders)
             guard case .response(let response) = outcome,
                   response.status == 200, let body = response.body, !body.isEmpty
             else {
