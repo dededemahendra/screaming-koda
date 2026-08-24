@@ -24,9 +24,13 @@ public struct SwiftSoupParser: PageParser {
         let h1s = try doc.select("h1")
         facts.h1Count = h1s.array().count
         facts.h1 = try h1s.first()?.text().trimmed()
-        facts.h2Count = try doc.select("h2").array().count
+        let h2s = try doc.select("h2")
+        facts.h2Count = h2s.array().count
+        facts.h2 = try h2s.first()?.text().trimmed()
 
-        facts.canonical = try doc.select("link[rel=canonical]").first()?.attr("href").trimmed()
+        let canonicals = try doc.select("link[rel=canonical]")
+        facts.canonicalCount = canonicals.array().count
+        facts.canonical = try canonicals.first()?.attr("href").trimmed()
         facts.metaRobots = try doc.select("meta[name=robots]").first()?.attr("content").trimmed()
         facts.lang = try doc.select("html").first()?.attr("lang").trimmed()
 

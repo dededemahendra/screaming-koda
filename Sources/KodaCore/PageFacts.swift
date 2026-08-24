@@ -41,8 +41,15 @@ public struct PageFacts: Sendable {
     public var metaDescriptionCount: Int = 0
     public var h1: String?
     public var h1Count: Int = 0
+    /// First H2 text. Counted since M1; stored from v4, because a count alone
+    /// cannot answer "is this H2 duplicated" or "is it too long".
+    public var h2: String?
     public var h2Count: Int = 0
     public var canonical: String?
+    /// How many `<link rel=canonical>` elements the page declares. Only the
+    /// first is followed, but a page declaring two is a real finding that was
+    /// invisible while only the first was recorded.
+    public var canonicalCount: Int = 0
     public var metaRobots: String?
     public var lang: String?
     public var wordCount: Int = 0

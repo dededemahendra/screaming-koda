@@ -78,8 +78,14 @@ private func rows(_ store: Store, _ report: Report, _ filterID: String) throws -
     }
 }
 
-@Test func thereAreElevenReports() {
-    #expect(Reports.all.count == 11)
+@Test func theReportInventoryIsWhatWeThinkItIs() {
+    // Hard-coded so a report silently vanishing fails here rather than as an
+    // empty tab nobody opened.
+    #expect(Reports.all.map(\.id) == [
+        "internal", "external", "responseCodes", "titles", "metaDescription", "headings",
+        "images", "canonicals", "directives", "hreflang", "pageDepth",
+        "content", "urls", "anchorText",
+    ])
 }
 
 // MARK: - Behaviour, per report
@@ -199,7 +205,83 @@ private func rows(_ store: Store, _ report: Report, _ filterID: String) throws -
 @Test func pageDepthReportFindsDeepAndWeaklyLinkedPages() throws {
     let store = try ReportFixture.make()
     #expect(try rows(store, Reports.pageDepth, "deep") == ["/deep/four"])
-    #expect(try rows(store, Reports.pageDepth, "singleInlink") == ["/dupe-a", "/one-inlink"])
+    // /anchor-generic is linked once, from the home page, so it belongs here too.
+    #expect(try rows(store, Reports.pageDepth, "singleInlink")
+            == ["/dupe-a", "/one-inlink", "/anchor-generic"])
     #expect(try !rows(store, Reports.pageDepth, "all").contains("/queued"),
             "an uncrawled URL has no observed depth position yet")
+}
+
+
+// MARK: - Wave 1 reports
+
+/// The clearest win in the coverage audit: `content_hash` was computed, stored
+/// and indexed on every crawl since M1, and no report ever queried it.
+@Test func contentReportFindsDuplicateAndThinPages() throws {
+    let store = try ReportFixture.make()
+    #expect(try rows(store, Reports.content, "duplicate") == ["/same-body-a", "/same-body-b"])
+    #expect(try rows(store, Reports.content, "veryThin") == ["/thin", "/empty-body"])
+    #expect(try rows(store, Reports.content, "empty") == ["/empty-body"])
+
+    let thin = try rows(store, Reports.content, "thin")
+    #expect(thin.contains("/thin"))
+    #expect(thin.contains("/empty-body"))
+    #expect(!thin.contains("/"), "a 400-word page is not thin")
+}
+
+@Test func urlReportFindsAwkwardURLShapes() throws {
+    let store = try ReportFixture.make()
+    #expect(try rows(store, Reports.urlStructure, "insecure") == ["/insecure"])
+    #expect(try rows(store, Reports.urlStructure, "uppercase") == ["/Upper/Case"])
+    #expect(try rows(store, Reports.urlStructure, "underscore") == ["/has_underscore"])
+    #expect(try rows(store, Reports.urlStructure, "encoded") == ["/percent%20encoded"])
+
+    let long = try rows(store, Reports.urlStructure, "long")
+    #expect(long.count == 1)
+    #expect(long.first?.hasPrefix("/a-really-quite-long") == true)
+}
+
+/// Trailing slashes are deliberately preserved by the normaliser because they
+/// can be significant, which is exactly why a site serving both forms is worth
+/// flagging: both are reachable and they are duplicates of each other.
+@Test func urlReportFindsTrailingSlashPairsInBothDirections() throws {
+    let store = try ReportFixture.make()
+    #expect(try rows(store, Reports.urlStructure, "slashPair") == ["/pair", "/pair/"])
+}
+
+@Test func urlReportFindsMixedWWWInBothDirections() throws {
+    let store = try ReportFixture.make()
+    let mixed = try rows(store, Reports.urlStructure, "mixedWWW")
+    #expect(mixed.contains("/on-www"), "the www host sees its non-www twin")
+    #expect(mixed.count > 1, "and every non-www page sees the www host")
+}
+
+@Test func anchorTextReportIsKeyedOnTheLinkTarget() throws {
+    let store = try ReportFixture.make()
+    let all = try rows(store, Reports.anchorText, "all")
+    #expect(all.contains("/anchor-many"))
+    #expect(!all.contains("/queued"), "a URL nothing links to is not in this tab")
+
+    #expect(try rows(store, Reports.anchorText, "empty") == ["/anchor-empty"])
+    #expect(try rows(store, Reports.anchorText, "generic") == ["/anchor-generic"])
+    #expect(try rows(store, Reports.anchorText, "inconsistent") == ["/anchor-many"])
+}
+
+/// A whitespace-only anchor is as useless as an absent one and must count as empty.
+@Test func aWhitespaceOnlyAnchorCountsAsMissing() throws {
+    let store = try ReportFixture.make()
+    #expect(try rows(store, Reports.anchorText, "empty").contains("/anchor-empty"))
+}
+
+@Test func canonicalsReportNowFindsMultipleDeclarations() throws {
+    let store = try ReportFixture.make()
+    #expect(try rows(store, Reports.canonicals, "multiple") == ["/canon-multiple"])
+    #expect(try rows(store, Reports.canonicals, "missing") == ["/canon-missing"])
+}
+
+@Test func headingsReportNowFindsDuplicateH2s() throws {
+    let store = try ReportFixture.make()
+    // Every fixture page gets a path-derived H2, so nothing is duplicated yet —
+    // the filter must return nothing rather than everything.
+    #expect(try rows(store, Reports.headings, "duplicateH2").isEmpty)
 }

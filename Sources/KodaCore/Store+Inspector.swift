@@ -58,7 +58,61 @@ public struct InspectorRows<Element: Sendable & Equatable>: Sendable, Equatable 
     }
 }
 
+public struct RedirectHop: Sendable, Identifiable, Equatable {
+    public let id: Int
+    public let urlID: Int64
+    public let url: String
+    public let status: Int?
+    /// True when the walk stopped here because this URL was already in the
+    /// chain — the honest way to report a loop rather than truncating silently.
+    public let isLoop: Bool
+}
+
 extension Store {
+    /// Walks `redirect_target_id` from a URL to wherever it ends up.
+    ///
+    /// Done in Swift rather than SQL because following a chain is inherently
+    /// recursive, and a recursive CTE inside a per-row scalar subquery would be
+    /// both hard to read and slow. The walk is bounded twice over: by `limit`,
+    /// and by a seen-set that stops dead on a cycle and says so.
+    ///
+    /// The first hop is the URL itself, so a page that does not redirect returns
+    /// a single-element chain rather than an empty one.
+    public func redirectChain(from id: Int64, limit: Int = 20) throws -> [RedirectHop] {
+        try dbQueue.read { db in
+            var out: [RedirectHop] = []
+            var seen: Set<Int64> = []
+            var current: Int64? = id
+
+            while let step = current, out.count < limit {
+                if seen.contains(step) {
+                    // Re-record the URL we came back to, flagged, so the pane can
+                    // show where the loop closes instead of just ending.
+                    if let row = try Row.fetchOne(db, sql: """
+                        SELECT u.id AS id, u.url AS url, r.status AS status
+                        FROM urls u LEFT JOIN responses r ON r.url_id = u.id
+                        WHERE u.id = ?
+                        """, arguments: [step]) {
+                        out.append(RedirectHop(id: out.count, urlID: row["id"], url: row["url"],
+                                               status: row["status"], isLoop: true))
+                    }
+                    break
+                }
+                seen.insert(step)
+                guard let row = try Row.fetchOne(db, sql: """
+                    SELECT u.id AS id, u.url AS url, r.status AS status,
+                           r.redirect_target_id AS next
+                    FROM urls u LEFT JOIN responses r ON r.url_id = u.id
+                    WHERE u.id = ?
+                    """, arguments: [step]) else { break }
+                out.append(RedirectHop(id: out.count, urlID: row["id"], url: row["url"],
+                                       status: row["status"], isLoop: false))
+                current = row["next"]
+            }
+            return out
+        }
+    }
+
     /// Paging the inspector is not worth it in M3b. A page with more than a
     /// thousand inlinks exists; the cap is surfaced rather than hidden.
     public static let inspectorLimit = 1000
@@ -76,8 +130,9 @@ extension Store {
                        f.title AS title, f.title_length AS title_length, f.title_count AS title_count,
                        f.meta_description AS descr, f.meta_description_length AS descr_length,
                        f.meta_description_count AS descr_count,
-                       f.h1 AS h1, f.h1_count AS h1_count, f.h2_count AS h2_count,
+                       f.h1 AS h1, f.h1_count AS h1_count, f.h2 AS h2, f.h2_count AS h2_count,
                        (SELECT cu.url FROM urls cu WHERE cu.id = f.canonical_id) AS canonical,
+                       f.canonical_count AS canonical_count,
                        f.meta_robots AS meta_robots, f.x_robots_tag AS x_robots,
                        f.lang AS lang, f.word_count AS word_count,
                        \(Indexability.expression) AS indexability,
@@ -111,8 +166,10 @@ extension Store {
                 .init(label: "Meta Descriptions Found", value: text("descr_count")),
                 .init(label: "H1", value: text("h1")),
                 .init(label: "H1s Found", value: text("h1_count")),
+                .init(label: "H2", value: text("h2")),
                 .init(label: "H2s Found", value: text("h2_count")),
                 .init(label: "Canonical", value: text("canonical")),
+                .init(label: "Canonicals Declared", value: text("canonical_count")),
                 .init(label: "Meta Robots", value: text("meta_robots")),
                 .init(label: "X-Robots-Tag", value: text("x_robots")),
                 .init(label: "Language", value: text("lang")),

@@ -77,6 +77,7 @@ public final class CrawlController {
     public private(set) var inlinks: InspectorRows<LinkRow>?
     public private(set) var outlinks: InspectorRows<LinkRow>?
     public private(set) var images: InspectorRows<ImageRow>?
+    public private(set) var redirectChain: [RedirectHop] = []
 
     public var selectedReport: Report {
         Reports.all.first { $0.id == selectedReportID } ?? Reports.internalURLs
@@ -380,12 +381,14 @@ public final class CrawlController {
             inlinks = nil
             outlinks = nil
             images = nil
+            redirectChain = []
             return
         }
         detail = try? store.detail(id: id)
         inlinks = try? store.inlinks(id: id)
         outlinks = try? store.outlinks(id: id)
         images = try? store.imageRows(id: id)
+        redirectChain = (try? store.redirectChain(from: id)) ?? []
     }
 
     /// Recomputes the sidebar counts, at most once per `countsRefreshInterval`

@@ -101,9 +101,9 @@ private func scratchDirectory() -> URL {
     let written = try ExportCommands.write(try store.exportAll(), format: .csv,
                                            to: directory.appendingPathComponent("out"),
                                            host: "fx.test", date: stamp)
-    #expect(written.count == 11)
+    #expect(written.count == 14)
     let names = written.map { $0.lastPathComponent }
-    #expect(Set(names).count == 11, "no two reports collide on a filename")
+    #expect(Set(names).count == 14, "no two reports collide on a filename")
     for url in written {
         #expect(FileManager.default.fileExists(atPath: url.path))
     }

@@ -60,6 +60,8 @@ private func idOf(_ store: Store, _ path: String) throws -> Int64 {
     #expect(Set(rows.items.map(\.url)) == [
         "https://fx.test/dupe-a", "https://fx.test/dupe-b", "https://fx.test/one-inlink",
         "https://ext.test/ok", "https://ext.test/broken",
+        "https://fx.test/anchor-empty", "https://fx.test/anchor-generic",
+        "https://fx.test/anchor-many",
     ])
 }
 
@@ -67,7 +69,8 @@ private func idOf(_ store: Store, _ path: String) throws -> Int64 {
 /// accident: /dupe-a links to /dupe-b, not the other way round.
 @Test func inlinksAndOutlinksPointOppositeWays() throws {
     let store = try ReportFixture.make()
-    #expect(try store.outlinks(id: idOf(store, "/dupe-b")).total == 0)
+    // /dupe-b links out once (to /anchor-many) and is linked to twice.
+    #expect(try store.outlinks(id: idOf(store, "/dupe-b")).total == 1)
     #expect(try store.inlinks(id: idOf(store, "/dupe-b")).total == 2)
 }
 
@@ -108,4 +111,63 @@ private func idOf(_ store: Store, _ path: String) throws -> Int64 {
     #expect(try store.outlinks(id: lonely).items.isEmpty)
     #expect(try store.imageRows(id: lonely).items.isEmpty)
     #expect(try store.inlinks(id: lonely).isTruncated == false)
+}
+
+// MARK: - Redirect chains
+
+/// A URL that does not redirect still has a chain: itself. Returning an empty
+/// list would make the pane look broken for the common case.
+@Test func aPageThatDoesNotRedirectIsAChainOfOne() throws {
+    let store = try ReportFixture.make()
+    let chain = try store.redirectChain(from: idOf(store, "/"))
+    #expect(chain.count == 1)
+    #expect(chain[0].url == "https://fx.test/")
+    #expect(chain[0].status == 200)
+}
+
+/// The whole point of the feature: "reached via 2+ redirects" told you a chain
+/// existed; this shows you what it was.
+@Test func aChainIsWalkedToItsDestination() throws {
+    let store = try ReportFixture.make()
+    let chain = try store.redirectChain(from: idOf(store, "/chain-1"))
+    #expect(chain.map(\.url) == [
+        "https://fx.test/chain-1", "https://fx.test/chain-2", "https://fx.test/chain-final",
+    ])
+    #expect(chain.map(\.status) == [301, 301, 200])
+    #expect(chain.allSatisfy { !$0.isLoop })
+}
+
+@Test func aSingleHopRedirectIsAChainOfTwo() throws {
+    let store = try ReportFixture.make()
+    let chain = try store.redirectChain(from: idOf(store, "/redirect-301"))
+    #expect(chain.map(\.url) == ["https://fx.test/redirect-301", "https://fx.test/"])
+}
+
+/// A cycle must terminate and be reported as a cycle, not silently truncated at
+/// the limit — which would read identically to a very long chain.
+@Test func aTwoStepLoopClosesAndIsMarked() throws {
+    let store = try ReportFixture.make()
+    let chain = try store.redirectChain(from: idOf(store, "/loop-a"))
+    #expect(chain.map(\.url) == [
+        "https://fx.test/loop-a", "https://fx.test/loop-b", "https://fx.test/loop-a",
+    ])
+    #expect(chain.last?.isLoop == true)
+    #expect(chain.dropLast().allSatisfy { !$0.isLoop })
+}
+
+@Test func aSelfRedirectIsMarkedAsALoopImmediately() throws {
+    let store = try ReportFixture.make()
+    let chain = try store.redirectChain(from: idOf(store, "/loop-self"))
+    #expect(chain.count == 2)
+    #expect(chain[1].isLoop)
+}
+
+@Test func theChainWalkHonoursItsLimit() throws {
+    let store = try ReportFixture.make()
+    #expect(try store.redirectChain(from: idOf(store, "/chain-1"), limit: 2).count == 2)
+}
+
+@Test func anUnknownIDHasNoChain() throws {
+    let store = try ReportFixture.make()
+    #expect(try store.redirectChain(from: 999_999).isEmpty)
 }

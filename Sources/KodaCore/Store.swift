@@ -136,6 +136,17 @@ public final class Store: @unchecked Sendable {
                 CREATE INDEX idx_urls_url ON urls(url);
                 """)
         }
+        m.registerMigration("v4-canonical-count-and-h2") { db in
+            // Both close gaps that made a page look clean when it was not: a
+            // page declaring two canonicals was indistinguishable from one
+            // declaring a single canonical, and H2s could be counted but never
+            // compared or measured.
+            try db.execute(sql: """
+                ALTER TABLE page_facts ADD COLUMN canonical_count INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE page_facts ADD COLUMN h2 TEXT;
+                CREATE INDEX idx_facts_h2 ON page_facts(h2);
+                """)
+        }
         return m
     }
 

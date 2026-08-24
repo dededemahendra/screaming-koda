@@ -56,7 +56,8 @@ public struct ContentView: View {
                     InspectorView(detail: controller.detail,
                                   inlinks: controller.inlinks,
                                   outlinks: controller.outlinks,
-                                  images: controller.images)
+                                  images: controller.images,
+                                  chain: controller.redirectChain)
                 }
                 .frame(minWidth: 640)
             }

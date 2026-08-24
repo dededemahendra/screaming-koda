@@ -2,7 +2,7 @@ import KodaCore
 import SwiftUI
 
 public enum InspectorPane: String, CaseIterable, Identifiable, Sendable {
-    case details, inlinks, outlinks, images
+    case details, inlinks, outlinks, images, chain
     public var id: String { rawValue }
 
     public var title: String {
@@ -11,6 +11,7 @@ public enum InspectorPane: String, CaseIterable, Identifiable, Sendable {
         case .inlinks: return "Inlinks"
         case .outlinks: return "Outlinks"
         case .images: return "Images"
+        case .chain: return "Redirect Chain"
         }
     }
 }
@@ -22,20 +23,23 @@ public struct InspectorView: View {
     private let inlinks: InspectorRows<LinkRow>?
     private let outlinks: InspectorRows<LinkRow>?
     private let images: InspectorRows<ImageRow>?
+    private let chain: [RedirectHop]
     @State private var pane: InspectorPane = .details
 
     public init(detail: URLDetail?, inlinks: InspectorRows<LinkRow>?,
-                outlinks: InspectorRows<LinkRow>?, images: InspectorRows<ImageRow>?) {
+                outlinks: InspectorRows<LinkRow>?, images: InspectorRows<ImageRow>?,
+                chain: [RedirectHop] = []) {
         self.detail = detail
         self.inlinks = inlinks
         self.outlinks = outlinks
         self.images = images
+        self.chain = chain
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Picker("", selection: $pane) {
-                ForEach(InspectorPane.allCases) { Text(label(for: $0)).tag($0) }
+                ForEach(panes) { Text(label(for: $0)).tag($0) }
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -51,6 +55,13 @@ public struct InspectorView: View {
         .frame(minHeight: 140)
     }
 
+    /// The chain pane appears only for a URL that actually redirects — an
+    /// always-present pane reading "not a redirect" on every ordinary page is
+    /// noise in a bar that is only five items wide.
+    private var panes: [InspectorPane] {
+        InspectorPane.allCases.filter { $0 != .chain || chain.count > 1 }
+    }
+
     /// Counts live in the tab labels so the cost of a page is visible before
     /// clicking into it.
     private func label(for pane: InspectorPane) -> String {
@@ -59,6 +70,7 @@ public struct InspectorView: View {
         case .inlinks: return count(inlinks?.total, pane.title)
         case .outlinks: return count(outlinks?.total, pane.title)
         case .images: return count(images?.total, pane.title)
+        case .chain: return "\(pane.title) (\(max(chain.count - 1, 0)))"
         }
     }
 
@@ -78,6 +90,8 @@ public struct InspectorView: View {
             linkList(outlinks, empty: "This page links nowhere")
         case .images:
             imageList
+        case .chain:
+            chainList
         }
     }
 
@@ -159,6 +173,30 @@ public struct InspectorView: View {
             } else {
                 placeholder("This page uses no images")
             }
+        }
+    }
+
+    private var chainList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(chain) { hop in
+                    HStack(spacing: 10) {
+                        Text("\(hop.id + 1)")
+                            .monospacedDigit().frame(width: 22, alignment: .trailing)
+                            .foregroundStyle(.secondary)
+                        Text(hop.status.map(String.init) ?? "–")
+                            .monospacedDigit().frame(width: 40, alignment: .trailing)
+                            .foregroundStyle(statusColour(hop.status))
+                        Text(hop.url).lineLimit(1).truncationMode(.middle)
+                        if hop.isLoop {
+                            Text("loop closes here")
+                                .font(.caption).foregroundStyle(.red)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+            .padding(10)
         }
     }
 

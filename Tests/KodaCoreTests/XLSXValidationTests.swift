@@ -105,7 +105,7 @@ private let sample = [
 
 /// The end-to-end shape a user actually gets: eleven sheets from a real crawl.
 @MainActor
-@Test func awholeCrawlExportsToAValidElevenSheetWorkbook() throws {
+@Test func awholeCrawlExportsToAValidWorkbookWithEverySheet() throws {
     let store = try ReportFixture.make()
     let data = try XLSXWriter.encode(try store.exportAll())
     let script = """
@@ -118,5 +118,5 @@ private let sample = [
         wb = ET.fromstring(z.read('xl/workbook.xml'))
         print(len(wb.find(NS + 'sheets')))
         """
-    #expect(try validate(data, script: script) == "11")
+    #expect(try validate(data, script: script) == "14")
 }

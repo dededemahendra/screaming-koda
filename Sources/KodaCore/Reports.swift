@@ -118,6 +118,40 @@ public enum Reports {
             width: 65, alignment: .trailing)
         static let errorKind = ReportColumn(id: "errorKind", header: "Error",
                                             expression: "r.error_kind", width: 180)
+        static let h2 = ReportColumn(id: "h2", header: "H2", expression: "f.h2", width: 240)
+        static let canonicalCount = ReportColumn(id: "canonicalCount", header: "Canonicals",
+                                                 expression: "f.canonical_count",
+                                                 width: 80, alignment: .trailing)
+        static let urlLength = ReportColumn(id: "urlLength", header: "URL Len",
+                                            expression: "length(u.url)",
+                                            width: 70, alignment: .trailing)
+        static let scheme = ReportColumn(
+            id: "scheme", header: "Scheme",
+            expression: "CASE WHEN u.url LIKE 'https://%' THEN 'https' ELSE 'http' END", width: 70)
+        static let contentHash = ReportColumn(id: "contentHash", header: "Content Hash",
+                                              expression: "f.content_hash", width: 110)
+        static let sameContentAs = ReportColumn(
+            id: "sameContentAs", header: "Identical To",
+            expression: """
+                (SELECT count(*) FROM page_facts f2
+                 WHERE f2.content_hash = f.content_hash AND f2.url_id != u.id)
+                """,
+            width: 90, alignment: .trailing)
+        static let distinctAnchors = ReportColumn(
+            id: "distinctAnchors", header: "Anchors",
+            expression: """
+                (SELECT count(DISTINCT trim(lower(coalesce(l.anchor_text, ''))))
+                 FROM links l WHERE l.to_url_id = u.id)
+                """,
+            width: 70, alignment: .trailing)
+        static let topAnchor = ReportColumn(
+            id: "topAnchor", header: "Most Common Anchor",
+            expression: """
+                (SELECT l.anchor_text FROM links l WHERE l.to_url_id = u.id
+                 GROUP BY trim(lower(coalesce(l.anchor_text, '')))
+                 ORDER BY count(*) DESC, l.anchor_text ASC LIMIT 1)
+                """,
+            width: 260)
     }
 
     static let allFilter = ReportFilter(id: "all", name: "All", predicate: "1")
@@ -127,6 +161,7 @@ public enum Reports {
     public static let all: [Report] = [
         internalURLs, external, responseCodes, titles, metaDescription, headings,
         images, canonicals, directives, hreflang, pageDepth,
+        content, urlStructure, anchorText,
     ]
 
     public static let internalURLs = Report(
@@ -228,7 +263,7 @@ public enum Reports {
     public static let headings = Report(
         id: "headings", name: "Headings",
         predicate: htmlPage,
-        columns: [Col.address, Col.h1, Col.h1Length, Col.h1Count, Col.h2Count, Col.title],
+        columns: [Col.address, Col.h1, Col.h1Length, Col.h1Count, Col.h2, Col.h2Count, Col.title],
         filters: [
             allFilter,
             ReportFilter(id: "missingH1", name: "Missing H1", predicate: missing("h1"), isIssue: true),
@@ -240,6 +275,8 @@ public enum Reports {
                          predicate: "length(f.h1) > 70", isIssue: true),
             ReportFilter(id: "missingH2", name: "Missing H2",
                          predicate: "coalesce(f.h2_count, 0) = 0", isIssue: true),
+            ReportFilter(id: "duplicateH2", name: "Duplicate H2",
+                         predicate: duplicated("h2"), isIssue: true),
         ])
 
     public static let images = Report(
@@ -263,7 +300,7 @@ public enum Reports {
     public static let canonicals = Report(
         id: "canonicals", name: "Canonicals",
         predicate: htmlPage,
-        columns: [Col.address, Col.canonical, Col.indexability, Col.title],
+        columns: [Col.address, Col.canonical, Col.canonicalCount, Col.indexability, Col.title],
         filters: [
             allFilter,
             ReportFilter(id: "missing", name: "Missing",
@@ -278,6 +315,10 @@ public enum Reports {
                   SELECT 1 FROM responses cr WHERE cr.url_id = f.canonical_id AND cr.status != 200
                 )
                 """, isIssue: true),
+            // Only the first canonical is followed, so a page declaring two is
+            // silently having one of them ignored by every search engine.
+            ReportFilter(id: "multiple", name: "Multiple",
+                         predicate: "f.canonical_count > 1", isIssue: true),
         ])
 
     public static let directives = Report(
@@ -326,6 +367,105 @@ public enum Reports {
                 NOT EXISTS (
                   SELECT 1 FROM hreflang h WHERE h.url_id = u.id AND lower(h.lang) = 'x-default'
                 )
+                """, isIssue: true),
+        ])
+
+    /// What the crawler already knew and never said.
+    ///
+    /// `content_hash` — SHA-256 of each page's normalised visible text — has been
+    /// computed, stored and indexed since M1, and until now no report queried it.
+    /// Duplicate content was paid for on every crawl and never collected.
+    public static let content = Report(
+        id: "content", name: "Content",
+        predicate: htmlPage,
+        columns: [Col.address, Col.wordCount, Col.sameContentAs, Col.contentHash,
+                  Col.title, Col.indexability],
+        filters: [
+            allFilter,
+            // Exact match on the hash, per the master spec's v1 position. Two
+            // pages differing by one character are not duplicates here.
+            ReportFilter(id: "duplicate", name: "Duplicate content", predicate: """
+                f.content_hash IS NOT NULL AND length(f.content_hash) > 0 AND EXISTS (
+                  SELECT 1 FROM page_facts f2
+                  JOIN urls u2 ON u2.id = f2.url_id
+                  JOIN responses r2 ON r2.url_id = f2.url_id
+                  WHERE f2.content_hash = f.content_hash AND f2.url_id != u.id
+                    AND u2.is_internal = 1 AND r2.status = 200
+                )
+                """, isIssue: true),
+            ReportFilter(id: "thin", name: "Under 200 words",
+                         predicate: "coalesce(f.word_count, 0) < 200", isIssue: true),
+            ReportFilter(id: "veryThin", name: "Under 50 words",
+                         predicate: "coalesce(f.word_count, 0) < 50", isIssue: true),
+            ReportFilter(id: "empty", name: "No content at all",
+                         predicate: "coalesce(f.word_count, 0) = 0", isIssue: true),
+        ])
+
+    /// The shape of the URLs themselves, which is where a surprising share of
+    /// duplicate-content and canonicalisation trouble actually starts.
+    public static let urlStructure = Report(
+        id: "urls", name: "URLs",
+        predicate: "u.is_internal = 1 AND \(pageRows)",
+        columns: [Col.address, Col.urlLength, Col.scheme, Col.status,
+                  Col.indexability, Col.depth],
+        filters: [
+            allFilter,
+            ReportFilter(id: "insecure", name: "Not HTTPS",
+                         predicate: "u.url NOT LIKE 'https://%'", isIssue: true),
+            // Only a finding when the crawl contains both forms: a site that is
+            // consistently one or the other is fine, whichever it picked.
+            ReportFilter(id: "mixedWWW", name: "Mixed www and non-www", predicate: """
+                EXISTS (SELECT 1 FROM urls u2 WHERE u2.is_internal = 1 AND (
+                  (u.host LIKE 'www.%' AND u2.host = substr(u.host, 5))
+                  OR (u.host NOT LIKE 'www.%' AND u2.host = 'www.' || u.host)))
+                """, isIssue: true),
+            ReportFilter(id: "params", name: "Contains parameters",
+                         predicate: "u.url LIKE '%?%'"),
+            ReportFilter(id: "long", name: "Over 115 characters",
+                         predicate: "length(u.url) > 115", isIssue: true),
+            // Uppercase in a path is a duplicate-content risk because most
+            // servers treat paths case-sensitively and most links do not.
+            ReportFilter(id: "uppercase", name: "Uppercase in path",
+                         predicate: "u.path != lower(u.path)", isIssue: true),
+            ReportFilter(id: "underscore", name: "Underscores in path",
+                         predicate: "u.path LIKE '%\\_%' ESCAPE '\\'", isIssue: true),
+            ReportFilter(id: "encoded", name: "Percent-encoded",
+                         predicate: "u.url LIKE '%\\%%' ESCAPE '\\'"),
+            // The normaliser deliberately preserves trailing slashes, since they
+            // can be semantically significant. That makes both forms reachable,
+            // so a site serving both is worth knowing about.
+            ReportFilter(id: "slashPair", name: "Same URL with and without a trailing slash",
+                         predicate: """
+                EXISTS (SELECT 1 FROM urls u2 WHERE u2.is_internal = 1 AND u2.id != u.id
+                        AND u2.url = CASE WHEN u.url LIKE '%/' THEN substr(u.url, 1, length(u.url) - 1)
+                                          ELSE u.url || '/' END)
+                """, isIssue: true),
+        ])
+
+    /// Keyed on the URL being linked *to*, so a row answers "how is this page
+    /// described by the pages that link to it" — which is the question anchor
+    /// text is actually asked.
+    public static let anchorText = Report(
+        id: "anchorText", name: "Anchor Text",
+        predicate: "u.id IN (SELECT to_url_id FROM links)",
+        columns: [Col.address, Col.inlinks, Col.distinctAnchors, Col.topAnchor, Col.status],
+        filters: [
+            allFilter,
+            ReportFilter(id: "empty", name: "Linked with no anchor text", predicate: """
+                EXISTS (SELECT 1 FROM links l WHERE l.to_url_id = u.id
+                        AND (l.anchor_text IS NULL OR trim(l.anchor_text) = ''))
+                """, isIssue: true),
+            // Anchors that describe nothing. Cheap to spot and worth fixing,
+            // because they waste the strongest on-page relevance signal a link has.
+            ReportFilter(id: "generic", name: "Generic anchor text", predicate: """
+                EXISTS (SELECT 1 FROM links l WHERE l.to_url_id = u.id
+                        AND trim(lower(coalesce(l.anchor_text, ''))) IN
+                          ('click here','here','read more','more','link','this','learn more',
+                           'find out more','continue','details','go','download','click'))
+                """, isIssue: true),
+            ReportFilter(id: "inconsistent", name: "Five or more different anchors", predicate: """
+                (SELECT count(DISTINCT trim(lower(coalesce(l.anchor_text, ''))))
+                 FROM links l WHERE l.to_url_id = u.id) >= 5
                 """, isIssue: true),
         ])
 

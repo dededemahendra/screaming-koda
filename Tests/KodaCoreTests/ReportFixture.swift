@@ -36,6 +36,15 @@ enum ReportFixture {
         var canonicalTo: String? = "SELF"
         var metaRobots: String? = nil
         var xRobots: String? = nil
+        var canonicalCount: Int = 1
+        var wordCount: Int = 400
+        /// What the content hash is derived from. Defaults to the path, so every
+        /// page is unique unless two deliberately share a key.
+        var contentKey: String? = nil
+        /// Full URL, when the page is not `https://fx.test` + path — used for the
+        /// http/https and www/non-www cases.
+        var absoluteURL: String? = nil
+        var hostOverride: String? = nil
     }
 
     /// Titles of an exact length, so the over-60 / under-30 filters are tested
@@ -91,7 +100,8 @@ enum ReportFixture {
         Page(path: "/no-h2", h2Count: 0),
 
         // Canonicals
-        Page(path: "/canon-missing", canonicalTo: nil),
+        Page(path: "/canon-missing", canonicalTo: nil, canonicalCount: 0),
+        Page(path: "/canon-multiple", canonicalCount: 3),
         Page(path: "/canonicalised", canonicalTo: "/"),
         Page(path: "/canon-to-404", canonicalTo: "/gone"),
 
@@ -129,6 +139,34 @@ enum ReportFixture {
         // Depth and inlinks
         Page(path: "/deep/four", depth: 4),
         Page(path: "/one-inlink"),
+
+        // Content: two pages with identical body text, plus the thin cases.
+        Page(path: "/same-body-a", contentKey: "shared-body"),
+        Page(path: "/same-body-b", contentKey: "shared-body"),
+        Page(path: "/thin", wordCount: 30),
+        Page(path: "/empty-body", wordCount: 0),
+
+        // URL shape.
+        Page(path: "/Upper/Case"),
+        Page(path: "/has_underscore"),
+        Page(path: "/percent%20encoded"),
+        // Explicit text, because the auto values are derived from the path and
+        // this path is long enough that they would trip the title and H1 length
+        // filters — making this page a false positive in two other reports.
+        Page(path: "/a-really-quite-long-path-that-goes-well-beyond-one-hundred-and-fifteen-"
+                 + "characters-in-total-for-the-length-filter",
+             title: "A page with a very long address indeed",
+             desc: pad("A page whose address is long but whose text is not", to: 100),
+             h1: "Long address, ordinary heading"),
+        Page(path: "/pair"),
+        Page(path: "/pair/"),
+        Page(path: "/insecure", absoluteURL: "http://fx.test/insecure"),
+        Page(path: "/on-www", absoluteURL: "https://www.fx.test/on-www", hostOverride: "www.fx.test"),
+
+        // Anchor text targets.
+        Page(path: "/anchor-empty"),
+        Page(path: "/anchor-generic"),
+        Page(path: "/anchor-many"),
     ]
 
     static let external: [Page] = [
@@ -158,14 +196,16 @@ enum ReportFixture {
             // Two passes: every URL row first, so redirect and canonical targets
             // can be resolved by path without caring about declaration order.
             for page in pages + external + images {
-                let url = page.isInternal ? "https://fx.test\(page.path)" : page.path
+                let url = page.absoluteURL
+                    ?? (page.isInternal ? "https://fx.test\(page.path)" : page.path)
                 try db.execute(
                     sql: """
                         INSERT INTO urls (url, url_hash, host, path, depth, is_internal,
                                           discovered_at, state, redirect_hops, check_only)
                         VALUES (?,?,?,?,?,?,0,?,?,?)
                         """,
-                    arguments: [url, Data(url.utf8), page.isInternal ? "fx.test" : "ext.test",
+                    arguments: [url, Data(url.utf8),
+                                page.hostOverride ?? (page.isInternal ? "fx.test" : "ext.test"),
                                 page.path, page.depth, page.isInternal ? 1 : 0,
                                 page.status == nil ? 0 : 2, page.redirectHops,
                                 page.checkOnly ? 1 : 0])
@@ -196,14 +236,16 @@ enum ReportFixture {
                         INSERT INTO page_facts
                           (url_id, title, title_length, title_count,
                            meta_description, meta_description_length, meta_description_count,
-                           h1, h1_count, h2_count, canonical_id, meta_robots, x_robots_tag,
-                           lang, word_count, content_hash)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'en',400,?)
+                           h1, h1_count, h2_count, canonical_id, canonical_count,
+                           meta_robots, x_robots_tag, lang, word_count, content_hash)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'en',?,?)
                         """,
                     arguments: [id, title, title?.count, page.titleCount,
                                 desc, desc?.count, page.descCount,
                                 h1, page.h1Count, page.h2Count, canonical,
-                                page.metaRobots, page.xRobots, Data(page.path.utf8)])
+                                page.canonicalTo == nil ? 0 : page.canonicalCount,
+                                page.metaRobots, page.xRobots, page.wordCount,
+                                Data((page.contentKey ?? page.path).utf8)])
             }
 
             // Links. Only what the inlink-count filters need, plus enough to keep
@@ -213,6 +255,24 @@ enum ReportFixture {
                 ("/", "/one-inlink"),
                 ("/", "https://ext.test/ok"), ("/", "https://ext.test/broken"),
             ]
+            // Anchor-text cases, which need control over the anchor itself.
+            let anchored: [(String, String, String?)] = [
+                ("/", "/anchor-empty", nil),
+                ("/dupe-a", "/anchor-empty", "   "),
+                ("/", "/anchor-generic", "Click here"),
+                ("/", "/anchor-many", "alpha"), ("/dupe-a", "/anchor-many", "beta"),
+                ("/dupe-b", "/anchor-many", "gamma"), ("/dupe-desc-a", "/anchor-many", "delta"),
+                ("/one-inlink", "/anchor-many", "epsilon"),
+            ]
+            for (index, entry) in anchored.enumerated() {
+                guard let from = ids[entry.0], let to = ids[entry.1] else { continue }
+                try db.execute(
+                    sql: """
+                        INSERT INTO links (from_url_id, to_url_id, anchor_text, rel, is_internal, position)
+                        VALUES (?,?,?,NULL,1,?)
+                        """,
+                    arguments: [from, to, entry.2, 100 + index])
+            }
             for (index, link) in links.enumerated() {
                 guard let from = ids[link.0], let to = ids[link.1] else { continue }
                 try db.execute(
