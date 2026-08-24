@@ -219,3 +219,24 @@ private func waitUntil(timeout: TimeInterval = 10, _ condition: @MainActor () ->
         try await Task.sleep(nanoseconds: 5_000_000)
     }
 }
+
+@MainActor
+@Test func refreshPublishesLiveFrontierCounts() async throws {
+    // The toolbar reads these rather than the engine's per-chunk callback, which
+    // on a site of slow pages would leave a working crawl looking stalled.
+    let controller = CrawlController(clientFactory: { FixtureSite() })
+    let model = AppModel(controller: controller)
+    #expect(model.liveCounts == nil)
+
+    controller.start(config: CrawlConfig(seedURL: "https://fx.test/"), dbPath: nil)
+    try await waitUntil { !controller.phase.isRunning }
+    model.refresh()
+
+    let counts = try #require(model.liveCounts)
+    #expect(counts.done > FixtureSite.pageCount)
+    #expect(counts.queued == 0)
+    #expect(counts.inFlight == 0)
+
+    model.reset()
+    #expect(model.liveCounts == nil)
+}

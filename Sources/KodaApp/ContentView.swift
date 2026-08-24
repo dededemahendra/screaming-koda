@@ -88,7 +88,7 @@ struct ContentView: View {
                     .disabled(model.seedURL.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
-        ToolbarItem { ProgressSummary(controller: controller) }
+        ToolbarItem { ProgressSummary(model: model) }
     }
 
     private var startLabel: String {
@@ -130,21 +130,24 @@ struct ContentView: View {
     }
 }
 
-/// Live counts. Reads from the engine's progress callback, not from the database,
-/// so it stays responsive even when a query is slow.
+/// Live counts, read from the database on the refresh timer rather than from the
+/// engine's per-chunk callback, which on a site of slow pages is far too
+/// infrequent to look alive.
 struct ProgressSummary: View {
-    let controller: CrawlController
+    let model: AppModel
 
     var body: some View {
         HStack(spacing: 12) {
-            if controller.phase.isRunning {
+            if model.controller.phase.isRunning {
                 ProgressView().controlSize(.small)
             }
-            if let progress = controller.progress {
-                metric("Crawled", progress.crawled)
-                metric("Queued", progress.queued)
-                if progress.checked > 0 { metric("Checked", progress.checked) }
-                metric("URL/s", Int(controller.urlsPerSecond.rounded()))
+            if let counts = model.liveCounts {
+                metric("Crawled", counts.done)
+                metric("Queued", counts.queued)
+                metric("Found", counts.total)
+                if model.controller.phase.isRunning {
+                    metric("URL/s", Int(model.controller.urlsPerSecond.rounded()))
+                }
             }
         }
         .font(.caption.monospacedDigit())

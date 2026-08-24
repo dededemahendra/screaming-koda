@@ -18,6 +18,14 @@ public final class AppModel {
     public private(set) var selectedImages: [ImageRow] = []
     public private(set) var errorMessage: String?
 
+    /// Frontier counts read from the database on the refresh timer.
+    ///
+    /// The engine reports progress once per chunk, which on a site of slow pages
+    /// can be minutes apart and makes a working crawl look stalled. These come
+    /// from the same 2Hz read the table uses, so the counters move even when the
+    /// engine has nothing new to say.
+    public private(set) var liveCounts: (queued: Int, inFlight: Int, done: Int, total: Int)?
+
     /// What the toolbar field holds. Not the crawl's seed until Start is pressed.
     public var seedURL: String = ""
     /// Hide reports with nothing in them, which is most of them on a healthy site.
@@ -83,6 +91,7 @@ public final class AppModel {
             if table == nil, let definition = ReportCatalogue.report(id: selectedReportID) {
                 table = ReportTableModel(store: store, definition: definition)
             }
+            liveCounts = try store.urlCounts()
             reportCounts = try store.reportCounts()
             summary = try store.summary()
             table?.reload()
@@ -97,6 +106,7 @@ public final class AppModel {
         table = nil
         reportCounts = [:]
         summary = nil
+        liveCounts = nil
         clearSelection()
         errorMessage = nil
     }
