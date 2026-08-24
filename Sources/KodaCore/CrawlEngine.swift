@@ -29,6 +29,7 @@ public actor CrawlEngine {
     private var crawled = 0
     private var discovered = 0
     private var checked = 0
+    private var stopRequested = false
 
     public init(
         store: Store,
@@ -44,8 +45,26 @@ public actor CrawlEngine {
         self.robots = robots
     }
 
+    /// Asks the crawl to stop after the chunk in flight.
+    ///
+    /// There is no separate paused state. The frontier lives in SQLite, so
+    /// stopping and starting again *is* a resume: URLs left claimed are reset to
+    /// queued by the next run. A real pause would add a way for the engine and
+    /// the database to disagree about what had been done.
+    /// A stopped engine stays stopped. Resuming means running a new engine over
+    /// the same store, which is exactly what reopening a database already does.
+    public func requestStop() {
+        stopRequested = true
+    }
+
+    public var isStopRequested: Bool { stopRequested }
+
     /// Drains the frontier until nothing is queued. Never throws on a bad page.
-    public func run(onProgress: (@Sendable (CrawlProgress) -> Void)?) async throws {
+    ///
+    /// Returns whether the crawl finished. `false` means it stopped early and the
+    /// frontier still holds work.
+    @discardableResult
+    public func run(onProgress: (@Sendable (CrawlProgress) -> Void)?) async throws -> Bool {
         try store.resetInFlight()
 
         // A crawl-delay is a floor on the interval between *requests*, not between
@@ -63,6 +82,7 @@ public actor CrawlEngine {
         let chunkSize = isDelayed ? 1 : max(Self.writeBatchSize, concurrency)
 
         while true {
+            if stopRequested { return try stoppedEarly() }
             let chunk = try store.claimNext(limit: chunkSize)
             if chunk.isEmpty { break }
 
@@ -78,11 +98,16 @@ public actor CrawlEngine {
             // A sliding window, not a barrier: as each request finishes the next
             // starts immediately. Waiting for a whole round to complete would let
             // one URL that sits until the 20s timeout stall every other worker.
+            //
+            // A stop stops feeding the window rather than waiting for the chunk,
+            // so the longest a user waits is one request, not a hundred.
+            var started: Set<Int64> = []
             await withTaskGroup(of: CrawlResult?.self) { group in
                 var next = 0
                 while next < min(concurrency, chunk.count) {
                     let item = chunk[next]
                     next += 1
+                    started.insert(item.id)
                     group.addTask { [config, robots, client, parser] in
                         await Self.process(item: item, config: config, robots: robots,
                                            client: client, parser: parser, retainBodies: retainBodies)
@@ -90,9 +115,10 @@ public actor CrawlEngine {
                 }
                 while let result = await group.next() {
                     if let result { results.append(result) }
-                    guard next < chunk.count else { continue }
+                    guard next < chunk.count, !stopRequested else { continue }
                     let item = chunk[next]
                     next += 1
+                    started.insert(item.id)
                     group.addTask { [config, robots, client, parser] in
                         await Self.process(item: item, config: config, robots: robots,
                                            client: client, parser: parser, retainBodies: retainBodies)
@@ -100,9 +126,12 @@ public actor CrawlEngine {
                 }
             }
 
-            // URLs skipped by robots produce no result; close them out so they leave the frontier.
+            // Only URLs that were actually attempted and produced nothing were
+            // skipped by robots. Anything a stop left unstarted stays claimed, for
+            // resetInFlight to hand back to the frontier — marking it skipped would
+            // quietly retire a URL that has never been fetched.
             let produced = Set(results.map(\.urlID))
-            for item in chunk where !produced.contains(item.id) {
+            for item in chunk where started.contains(item.id) && !produced.contains(item.id) {
                 try store.markSkipped(item.id)
             }
 
@@ -122,8 +151,20 @@ public actor CrawlEngine {
             }
         }
 
+        if stopRequested { return try stoppedEarly() }
         try await checkRecordedURLs(onProgress: onProgress)
+        if stopRequested { return try stoppedEarly() }
+
         try store.markFinished(at: Date())
+        return true
+    }
+
+    /// Hands anything still claimed back to the frontier and reports not-finished.
+    /// The crawl is not marked finished, so reopening the database shows it as
+    /// incomplete rather than silently looking done.
+    private func stoppedEarly() throws -> Bool {
+        try store.resetInFlight()
+        return false
     }
 
     /// Second phase: give external links and internal images a status, without
@@ -145,6 +186,7 @@ public actor CrawlEngine {
                 external: config.checkExternalLinks, images: config.checkImages
             )
             if batch.isEmpty { break }
+            if stopRequested { return }
 
             var results: [CrawlResult] = []
             results.reserveCapacity(batch.count)

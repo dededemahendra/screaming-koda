@@ -1,0 +1,131 @@
+import Foundation
+import GRDB
+import Testing
+@testable import KodaCore
+
+/// A wide site: enough URLs that a stop lands mid-crawl rather than at the end.
+private struct WideSite: HTTPClient {
+    let onFetch: @Sendable (String) async -> Void
+
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
+        if url.hasSuffix("robots.txt") {
+            return .response(HTTPResponse(status: 404, headers: [:], body: Data(), elapsedMs: 1))
+        }
+        await onFetch(url)
+        let body: String
+        if url == "https://wide.test/" {
+            let links = (0..<40).map { "<a href='/p\($0)'>p\($0)</a>" }.joined()
+            body = "<html><head><title>Home</title></head><body><h1>H</h1>\(links)</body></html>"
+        } else {
+            body = "<html><head><title>Page</title></head><body><h1>P</h1></body></html>"
+        }
+        return .response(HTTPResponse(status: 200, headers: ["Content-Type": "text/html"],
+                                      body: Data(body.utf8), elapsedMs: 1))
+    }
+}
+
+private func seededStore() throws -> (Store, CrawlConfig) {
+    let store = try Store(path: nil)
+    try store.migrate()
+    var config = CrawlConfig(seedURL: "https://wide.test/")
+    config.workers = 2
+    config.checkExternalLinks = false
+    config.checkImages = false
+    try store.initializeCrawl(config: config, startedAt: Date())
+    _ = try store.insertURLIfNew(URLNormalizer.normalize(config.seedURL, relativeTo: nil)!,
+                                 depth: 0, isInternal: true, discoveredAt: Date())
+    return (store, config)
+}
+
+@Test func stopLeavesTheFrontierResumable() async throws {
+    let (store, config) = try seededStore()
+    let box = EngineBox()
+    // Stop the moment the first page beyond the seed is fetched, so the crawl is
+    // interrupted with the seed's forty links already queued.
+    let client = WideSite(onFetch: { url in
+        if url != "https://wide.test/" { await box.engine?.requestStop() }
+    })
+    let engine = CrawlEngine(store: store, client: client, parser: SwiftSoupParser(), config: config)
+    await box.set(engine)
+
+    let finished = try await engine.run(onProgress: nil)
+
+    #expect(finished == false, "a stopped crawl does not report completion")
+    let counts = try store.urlCounts()
+    #expect(counts.inFlight == 0, "nothing is left claimed")
+    #expect(counts.queued >= 1, "the frontier still holds work")
+}
+
+@Test func aStoppedCrawlFinishesOnASecondRun() async throws {
+    let (store, config) = try seededStore()
+
+    let first = CrawlEngine(store: store, client: WideSite(onFetch: { _ in }),
+                            parser: SwiftSoupParser(), config: config)
+    await first.requestStop()
+    #expect(try await first.run(onProgress: nil) == false)
+    #expect(try store.urlCounts().done == 0, "stopping before the first chunk crawls nothing")
+
+    let second = CrawlEngine(store: store, client: WideSite(onFetch: { _ in }),
+                             parser: SwiftSoupParser(), config: config)
+    #expect(try await second.run(onProgress: nil) == true)
+    #expect(try store.urlCounts().queued == 0)
+    #expect(try store.urlCounts().done == 41, "the seed plus all forty pages")
+}
+
+@Test func stoppingMidCrawlKeepsWhatWasAlreadyDone() async throws {
+    let (store, config) = try seededStore()
+
+    // Stop once a handful of pages are in, so the crawl is genuinely partial.
+    actor Counter {
+        var seen = 0
+        func bump() -> Int { seen += 1; return seen }
+    }
+    let counter = Counter()
+    let box = EngineBox()
+    let client = WideSite(onFetch: { _ in
+        if await counter.bump() >= 5 { await box.engine?.requestStop() }
+    })
+    let engine = CrawlEngine(store: store, client: client, parser: SwiftSoupParser(), config: config)
+    await box.set(engine)
+
+    let finished = try await engine.run(onProgress: nil)
+    #expect(finished == false)
+
+    let partial = try store.urlCounts()
+    #expect(partial.done > 0, "work already completed is kept")
+    #expect(partial.done < 41, "but the crawl really did stop early")
+    #expect(partial.inFlight == 0)
+
+    // Resuming completes it without redoing what was finished.
+    let resumed = CrawlEngine(store: store, client: WideSite(onFetch: { _ in }),
+                              parser: SwiftSoupParser(), config: config)
+    #expect(try await resumed.run(onProgress: nil) == true)
+    #expect(try store.urlCounts().done == 41)
+}
+
+@Test func aFinishedCrawlIsMarkedFinishedAndAStoppedOneIsNot() async throws {
+    let (store, config) = try seededStore()
+
+    let stopped = CrawlEngine(store: store, client: WideSite(onFetch: { _ in }),
+                              parser: SwiftSoupParser(), config: config)
+    await stopped.requestStop()
+    _ = try await stopped.run(onProgress: nil)
+    let afterStop = try await store.dbQueue.read { db in
+        try Double.fetchOne(db, sql: "SELECT finished_at FROM crawl_meta WHERE id = 1")
+    }
+    #expect(afterStop == nil, "a stopped crawl must not look complete")
+
+    let completing = CrawlEngine(store: store, client: WideSite(onFetch: { _ in }),
+                                 parser: SwiftSoupParser(), config: config)
+    _ = try await completing.run(onProgress: nil)
+    let afterFinish = try await store.dbQueue.read { db in
+        try Double.fetchOne(db, sql: "SELECT finished_at FROM crawl_meta WHERE id = 1")
+    }
+    #expect(afterFinish != nil)
+}
+
+/// Lets the stub client reach the engine that owns it.
+private actor EngineBox {
+    private(set) var engine: CrawlEngine?
+    func set(_ engine: CrawlEngine) { self.engine = engine }
+}
