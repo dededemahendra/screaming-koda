@@ -1,7 +1,7 @@
 # v2 Feature Expansion — Design
 
 **Date:** 2026-08-24
-**Status:** In progress. 104 of 125 delivered.
+**Status:** Complete. 125 of 125 delivered 2026-08-24.
 **Supersedes:** nothing. v1 (`2026-08-17-screaming-koda-design.md`) is delivered
 and its decisions still hold; this records what was built on top and why.
 
@@ -25,8 +25,14 @@ Sequenced by dependency, not preference. Each wave needed the one before it.
 | 2 | Read more out of HTML already fetched | 55 → 74 |
 | 3 | New ways in and out of a crawl | 74 → 86 |
 | 4 | A rendering engine | 86 → 92 |
-| 5 | Blocked on external accounts | not started |
-| 6 | Application features | 92 → 104 |
+| 5 | External data providers | 106 → 119 |
+| 6 | Application features | 92 → 106, then 119 → 125 |
+
+Wave 5 ran after Wave 6 rather than before it, because it was blocked on
+credentials and Wave 6 was not. It turned out not to be blocked after all: a
+provider needs a key *at runtime*, the same way Basic auth needs a password,
+and the integration itself is ordinary code that can be built and tested
+without one.
 
 The estimate that was most wrong was Wave 4. A browser engine was budgeted in
 months and took a sitting, because probing came before designing.
@@ -119,21 +125,44 @@ without notice. They are a guide.
 
 ## What remains
 
-Twenty-one items, of which twelve cannot be built here at all:
+Nothing on the list. Two things are worth stating plainly instead.
 
-**Blocked on your accounts (12).** Google Analytics, Search Console, PageSpeed
-Insights and Lighthouse need Google OAuth. Ahrefs, Majestic and Moz need paid
-API keys, and backlink analysis needs one of them — no crawler can see backlinks
-on its own. The three "versus crawl" comparison reports sit on top of those.
+**The external providers have never run against a paid account.** They are
+tested against stubs with realistic response shapes, and against one live
+PageSpeed call that returned a genuine 429 — which confirms the request is
+well-formed and the error path reports rather than swallows, and confirms
+nothing about parsing a successful response from the real service. Anyone
+relying on those numbers should check them against the provider's own
+dashboard the first time.
 
-**Achievable, not yet built (9).** Crawl visualisation and crawl trees;
-scheduling; user-defined custom reports; XPath extraction (CSS selectors and
-JavaScript expressions cover the ground today); form-based authentication
-(Basic and header auth work); and Core Web Vitals, which is capped by WebKit
-rather than by effort.
+**A feature list is not depth.** Each of these is one careful implementation
+with tests; Screaming Frog is years of accumulated edge cases. Parity on a
+checklist is not parity in the field, and the v1 spec's caution about that was
+right even though its scope decision was reversed.
 
-Nothing left is blocked on a hard technical problem. What remains is either an
-API key or a different kind of application.
+Three limits are inherent rather than unfinished, and are documented where they
+bite: CLS and INP cannot be measured locally and come only from field data;
+repeated `Set-Cookie` headers collapse in `URLSession`; and pixel-width
+thresholds are conventions Google changes without notice.
+
+## Late additions worth recording
+
+**The HTTP client's default chain ran the wrong way.** Three `fetch` overloads
+each defaulted to the barest, so a client implementing the headers-and-body
+form lost its headers whenever something called the headers form — silently,
+because dropping a header is not an error, it is just an unauthenticated
+request. Found when the Ahrefs stub saw no `Authorization`. The chain now runs
+from richest to barest.
+
+**WKWebView shares a persistent cookie jar.** A form login during one crawl was
+still present when crawling a different site later, and across app launches.
+The test suite proved it by finding a session cookie in the wrong-password case
+that an earlier test had established. Each renderer now owns a non-persistent
+store, so a session lasts exactly as long as the crawl that made it.
+
+**A report id collision.** The new External Data tab was called `external`,
+which the External links tab already owned, so their sidebar count keys
+collided in a dictionary. Caught by the uniqueness test that exists for it.
 
 ## Testing
 
