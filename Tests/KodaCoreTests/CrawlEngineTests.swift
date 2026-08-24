@@ -305,3 +305,54 @@ private func peakConcurrency(robots: RobotsRules) async throws -> Int {
     // The seed is always crawled; beyond it only matching URLs are enqueued.
     #expect(paths == ["/", "/about"])
 }
+
+private actor SlowPageProbe {
+    private(set) var fastDone = 0
+    private(set) var fastDoneBeforeSlow: Int?
+
+    func fastFinished() { fastDone += 1 }
+    func slowFinished() { fastDoneBeforeSlow = fastDone }
+}
+
+/// One page that sits for a long time, and ten that answer immediately.
+private struct StallingSite: HTTPClient {
+    let probe: SlowPageProbe
+
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
+        func page(_ body: String) -> FetchOutcome {
+            .response(HTTPResponse(status: 200, headers: ["Content-Type": "text/html"],
+                                   body: Data(body.utf8), elapsedMs: 1))
+        }
+        if url.hasSuffix("robots.txt") {
+            return .response(HTTPResponse(status: 404, headers: [:], body: Data(), elapsedMs: 1))
+        }
+        if url == "https://stall.test/" {
+            let links = ["<a href='/slow'>slow</a>"]
+                + (0..<10).map { "<a href='/f\($0)'>f\($0)</a>" }
+            return page("<html><head><title>T</title></head><body><h1>H</h1>\(links.joined())</body></html>")
+        }
+        if url == "https://stall.test/slow" {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            await probe.slowFinished()
+            return page("<html><head><title>Slow</title></head><body><h1>S</h1></body></html>")
+        }
+        try? await Task.sleep(nanoseconds: 5_000_000)
+        await probe.fastFinished()
+        return page("<html><head><title>Fast</title></head><body><h1>F</h1></body></html>")
+    }
+}
+
+@Test func oneSlowURLDoesNotStallTheOtherWorkers() async throws {
+    // The frontier claims /slow first, so a design that waits for a whole round
+    // to finish before starting the next would leave workers idle behind it.
+    let probe = SlowPageProbe()
+    var config = CrawlConfig(seedURL: "https://stall.test/")
+    config.workers = 3
+
+    _ = try await CrawlSession.start(dbPath: nil, config: config, client: StallingSite(probe: probe),
+                                     parser: SwiftSoupParser(), onProgress: nil)
+
+    let before = await probe.fastDoneBeforeSlow
+    #expect(before != nil, "the slow page was crawled")
+    #expect((before ?? 0) >= 8, "fast pages must keep flowing while one URL hangs, got \(before ?? -1)")
+}

@@ -22,6 +22,10 @@ public actor CrawlEngine {
     private let config: CrawlConfig
     private let robots: RobotsRules
 
+    /// Target transaction size for the writer. Per-row inserts would make SQLite
+    /// the bottleneck long before the network is.
+    static let writeBatchSize = 100
+
     private var crawled = 0
     private var discovered = 0
     private var checked = 0
@@ -51,36 +55,54 @@ public actor CrawlEngine {
         // honest reading of the directive.
         let crawlDelay = config.respectRobots ? robots.crawlDelay(userAgent: config.userAgent) : nil
         let isDelayed = (crawlDelay ?? 0) > 0
-        let batchSize = isDelayed ? 1 : max(config.workers, 1)
+        let concurrency = isDelayed ? 1 : max(config.workers, 1)
+        // One claim covers many workers' worth of URLs so results accumulate into
+        // a transaction of roughly `writeBatchSize` rows rather than one per
+        // worker-sized round. A delayed crawl claims one at a time: the sleep
+        // between chunks is what paces the requests.
+        let chunkSize = isDelayed ? 1 : max(Self.writeBatchSize, concurrency)
 
         while true {
-            let batch = try store.claimNext(limit: batchSize)
-            if batch.isEmpty { break }
+            let chunk = try store.claimNext(limit: chunkSize)
+            if chunk.isEmpty { break }
 
             // Body retention is a size decision, not a preference: storing the HTML
             // of half a million pages turns a database that fits on a laptop into
-            // one that does not. Re-checked per batch so a crawl that grows past
+            // one that does not. Re-checked per chunk so a crawl that grows past
             // the limit stops retaining rather than having to be restarted.
             let retainBodies = try config.retainBodies && store.urlTotal() < config.retainBodyURLLimit
 
             var results: [CrawlResult] = []
-            results.reserveCapacity(batch.count)
+            results.reserveCapacity(chunk.count)
 
+            // A sliding window, not a barrier: as each request finishes the next
+            // starts immediately. Waiting for a whole round to complete would let
+            // one URL that sits until the 20s timeout stall every other worker.
             await withTaskGroup(of: CrawlResult?.self) { group in
-                for item in batch {
+                var next = 0
+                while next < min(concurrency, chunk.count) {
+                    let item = chunk[next]
+                    next += 1
                     group.addTask { [config, robots, client, parser] in
                         await Self.process(item: item, config: config, robots: robots,
                                            client: client, parser: parser, retainBodies: retainBodies)
                     }
                 }
-                for await result in group {
+                while let result = await group.next() {
                     if let result { results.append(result) }
+                    guard next < chunk.count else { continue }
+                    let item = chunk[next]
+                    next += 1
+                    group.addTask { [config, robots, client, parser] in
+                        await Self.process(item: item, config: config, robots: robots,
+                                           client: client, parser: parser, retainBodies: retainBodies)
+                    }
                 }
             }
 
             // URLs skipped by robots produce no result; close them out so they leave the frontier.
             let produced = Set(results.map(\.urlID))
-            for item in batch where !produced.contains(item.id) {
+            for item in chunk where !produced.contains(item.id) {
                 try store.markSkipped(item.id)
             }
 
