@@ -65,6 +65,12 @@ struct Crawl: AsyncParsableCommand {
     @Option(name: .long, help: "Response header to record for every page. Repeatable.")
     var extractHeader: [String] = []
 
+    @Option(name: .long, help: "CSS extraction as Name=selector. Repeatable.")
+    var css: [String] = []
+
+    @Option(name: .long, help: "XPath extraction as Name=expression. Repeatable.")
+    var xpath: [String] = []
+
     @Option(name: .long, help: "How many pages may render at once.")
     var renderConcurrency: Int = 2
 
@@ -84,6 +90,22 @@ struct Crawl: AsyncParsableCommand {
         config.renderJavaScript = render
         config.mobile = mobile
         config.headerExtractions = extractHeader
+        for (label, entries, engine) in [("--css", css, ExtractionEngine.css),
+                                         ("--xpath", xpath, ExtractionEngine.xpath)] {
+            for entry in entries {
+                guard let split = entry.firstIndex(of: "=") else {
+                    throw ValidationError("\(label) must be Name=expression, not \(entry)")
+                }
+                let name = String(entry[..<split]).trimmingCharacters(in: .whitespaces)
+                let selector = String(entry[entry.index(after: split)...])
+                    .trimmingCharacters(in: .whitespaces)
+                guard !name.isEmpty, !selector.isEmpty else {
+                    throw ValidationError("\(label) must be Name=expression, not \(entry)")
+                }
+                config.extractions.append(
+                    ExtractionRule(name: name, selector: selector, engine: engine))
+            }
+        }
         config.renderConcurrency = max(1, renderConcurrency)
         for entry in js {
             guard let split = entry.firstIndex(of: "=") else {

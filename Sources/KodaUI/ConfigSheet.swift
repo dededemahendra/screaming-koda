@@ -13,6 +13,7 @@ public struct ConfigSheet: View {
     @State private var sitemapText: String
     @State private var headerText: String
     @State private var jsExtractionText: String
+    @State private var extractionText: String
     private let onApply: (CrawlConfig) -> Void
     private let onCancel: () -> Void
 
@@ -23,6 +24,9 @@ public struct ConfigSheet: View {
         _includeText = State(initialValue: config.include.joined(separator: "\n"))
         _excludeText = State(initialValue: config.exclude.joined(separator: "\n"))
         _sitemapText = State(initialValue: config.sitemapURLs.joined(separator: "\n"))
+        _extractionText = State(initialValue: config.extractions
+            .map { "\($0.name) = \($0.engine == .xpath ? "xpath:" : "")\($0.selector)" }
+            .joined(separator: "\n"))
         _jsExtractionText = State(initialValue: config.javaScriptExtractions
             .map { "\($0.name) = \($0.selector)" }
             .joined(separator: "\n"))
@@ -39,6 +43,18 @@ public struct ConfigSheet: View {
         out.include = patterns(includeText)
         out.exclude = patterns(excludeText)
         out.sitemapURLs = patterns(sitemapText)
+        out.extractions = patterns(extractionText).compactMap { line in
+            guard let split = line.firstIndex(of: "=") else { return nil }
+            let name = String(line[..<split]).trimmingCharacters(in: .whitespaces)
+            var selector = String(line[line.index(after: split)...])
+                .trimmingCharacters(in: .whitespaces)
+            let isXPath = selector.lowercased().hasPrefix("xpath:")
+            if isXPath { selector = String(selector.dropFirst("xpath:".count))
+                .trimmingCharacters(in: .whitespaces) }
+            guard !name.isEmpty, !selector.isEmpty else { return nil }
+            return ExtractionRule(name: name, selector: selector,
+                                  engine: isXPath ? .xpath : .css)
+        }
         out.javaScriptExtractions = patterns(jsExtractionText).compactMap { line in
             guard let split = line.firstIndex(of: "=") else { return nil }
             let name = String(line[..<split]).trimmingCharacters(in: .whitespaces)
@@ -147,6 +163,16 @@ public struct ConfigSheet: View {
                              + "appear in the DOM, such as window variables.")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Section("Extraction") {
+                    Text("One per line, as Name = selector. Prefix an expression with "
+                         + "xpath: to use XPath instead of a CSS selector.")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    LabeledContent("Rules") {
+                        TextEditor(text: $extractionText)
+                            .font(.body.monospaced()).frame(height: 56)
                     }
                 }
                 Section("URL filters") {

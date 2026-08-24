@@ -6,12 +6,37 @@ public struct ExtractionRule: Codable, Sendable, Equatable, Identifiable {
     public var selector: String
     /// What to take from each matched element.
     public var value: ExtractionValue
+    /// How `selector` should be interpreted. Defaults to CSS, so every rule
+    /// written before XPath existed still means what it did.
+    public var engine: ExtractionEngine
     public var id: String { name }
 
-    public init(name: String, selector: String, value: ExtractionValue = .text) {
+    public init(name: String, selector: String, value: ExtractionValue = .text,
+                engine: ExtractionEngine = .css) {
         self.name = name
         self.selector = selector
         self.value = value
+        self.engine = engine
+    }
+
+    /// Decoding tolerates a rule stored before `engine` existed.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        selector = try c.decode(String.self, forKey: .selector)
+        value = try c.decodeIfPresent(ExtractionValue.self, forKey: .value) ?? .text
+        engine = try c.decodeIfPresent(ExtractionEngine.self, forKey: .engine) ?? .css
+    }
+}
+
+public enum ExtractionEngine: String, Codable, Sendable, CaseIterable {
+    case css, xpath
+
+    public var label: String {
+        switch self {
+        case .css: return "CSS selector"
+        case .xpath: return "XPath"
+        }
     }
 }
 

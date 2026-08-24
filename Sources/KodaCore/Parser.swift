@@ -22,7 +22,26 @@ public struct SwiftSoupParser: PageParser {
         var facts = try parse(html: html)
         guard !extractions.isEmpty else { return facts }
         let doc = try SwiftSoup.parse(html)
+        var xmlDocument: XMLDocument?
         for rule in extractions {
+            if rule.engine == .xpath {
+                // Parsed once, lazily: most crawls have no XPath rules and
+                // building a second document per page for nothing is wasteful.
+                //
+                // From the string rather than from Data. Probed, not assumed:
+                // XMLDocument(data:) with tidyHTML silently drops or
+                // double-encodes non-ASCII — "£10" comes back as "10" — which
+                // would corrupt every extraction containing a currency symbol
+                // or an accent. The string initialiser preserves it.
+                if xmlDocument == nil {
+                    xmlDocument = try? XMLDocument(xmlString: html,
+                                                   options: [.documentTidyHTML, .nodePreserveAll])
+                }
+                guard let xmlDocument else { continue }
+                facts.extractions.append(
+                    contentsOf: Self.xpathValues(xmlDocument, rule: rule))
+                continue
+            }
             // A selector that does not compile yields nothing for that rule and
             // leaves the rest of the page alone: one bad rule must not cost the
             // whole crawl, which is the same rule the fetcher and parser follow.
@@ -45,6 +64,34 @@ public struct SwiftSoupParser: PageParser {
             }
         }
         return facts
+    }
+
+    /// XPath results for one rule.
+    ///
+    /// Only node-returning expressions are supported. An XPath *function* such
+    /// as `count(//div)` returns a number rather than nodes, which
+    /// `nodes(forXPath:)` reports as an error — so it yields nothing for that
+    /// rule rather than failing the page. Extraction wants values off the
+    /// document, which is what node expressions give.
+    static func xpathValues(_ document: XMLDocument, rule: ExtractionRule) -> [ExtractionFact] {
+        guard let nodes = try? document.nodes(forXPath: rule.selector) else { return [] }
+        var out: [ExtractionFact] = []
+        for (index, node) in nodes.enumerated() {
+            let raw: String?
+            switch rule.value {
+            case .text, .attribute:
+                // An XPath expression names what it wants — `/@href` for an
+                // attribute, `/text()` for text — so there is nothing left for
+                // the value mode to choose. Both take the node's own value.
+                raw = node.stringValue
+            case .html:
+                raw = node.xmlString
+            }
+            guard let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !value.isEmpty else { continue }
+            out.append(ExtractionFact(name: rule.name, value: value, position: index))
+        }
+        return out
     }
 
     /// `div.price[data-value]` -> `data-value`.
