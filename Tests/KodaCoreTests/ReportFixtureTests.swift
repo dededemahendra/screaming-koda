@@ -101,6 +101,10 @@ import Testing
             #expect(ReportFixture.autoH1(page.path).count <= 70,
                     "\(page.path) auto H1 would be flagged as over 70")
         }
+        if page.h2 == ReportFixture.auto {
+            #expect(ReportFixture.autoH2(page.path).count <= 70,
+                    "\(page.path) auto H2 would be flagged as over 70")
+        }
         if page.desc == ReportFixture.auto {
             let n = ReportFixture.autoDesc(page.path).count
             #expect(n >= 70 && n <= 155, "\(page.path) auto description trips a length filter")

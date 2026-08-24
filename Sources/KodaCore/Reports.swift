@@ -277,6 +277,8 @@ public enum Reports {
                          predicate: "coalesce(f.h2_count, 0) = 0", isIssue: true),
             ReportFilter(id: "duplicateH2", name: "Duplicate H2",
                          predicate: duplicated("h2"), isIssue: true),
+            ReportFilter(id: "longH2", name: "H2 over 70 characters",
+                         predicate: "length(f.h2) > 70", isIssue: true),
         ])
 
     public static let images = Report(

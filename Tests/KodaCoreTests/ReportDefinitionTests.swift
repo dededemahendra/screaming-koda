@@ -279,9 +279,10 @@ private func rows(_ store: Store, _ report: Report, _ filterID: String) throws -
     #expect(try rows(store, Reports.canonicals, "missing") == ["/canon-missing"])
 }
 
-@Test func headingsReportNowFindsDuplicateH2s() throws {
+@Test func headingsReportNowFindsDuplicateAndOverlongH2s() throws {
     let store = try ReportFixture.make()
     // Every fixture page gets a path-derived H2, so nothing is duplicated yet —
     // the filter must return nothing rather than everything.
     #expect(try rows(store, Reports.headings, "duplicateH2").isEmpty)
+    #expect(try rows(store, Reports.headings, "longH2") == ["/long-h2"])
 }

@@ -32,6 +32,7 @@ enum ReportFixture {
         var descCount = 1
         var h1: String? = auto
         var h1Count = 1
+        var h2: String? = auto
         var h2Count = 2
         var canonicalTo: String? = "SELF"
         var metaRobots: String? = nil
@@ -67,6 +68,7 @@ enum ReportFixture {
     static func autoTitle(_ path: String) -> String { pad("Title for \(path)", to: 45) }
     static func autoDesc(_ path: String) -> String { pad("Description for \(path)", to: 110) }
     static func autoH1(_ path: String) -> String { pad("Heading for \(path)", to: 40) }
+    static func autoH2(_ path: String) -> String { pad("Subheading for \(path)", to: 42) }
 
     static let pages: [Page] = [
         // Clean baseline. Depth 0, self-canonical, everything present.
@@ -97,7 +99,8 @@ enum ReportFixture {
         Page(path: "/dupe-h1-b", h1: "Shared heading"),
         Page(path: "/multi-h1", h1Count: 2),
         Page(path: "/long-h1", h1: String(repeating: "h", count: 80)),
-        Page(path: "/no-h2", h2Count: 0),
+        Page(path: "/no-h2", h2: nil, h2Count: 0),
+        Page(path: "/long-h2", h2: String(repeating: "s", count: 80)),
 
         // Canonicals
         Page(path: "/canon-missing", canonicalTo: nil, canonicalCount: 0),
@@ -157,7 +160,8 @@ enum ReportFixture {
                  + "characters-in-total-for-the-length-filter",
              title: "A page with a very long address indeed",
              desc: pad("A page whose address is long but whose text is not", to: 100),
-             h1: "Long address, ordinary heading"),
+             h1: "Long address, ordinary heading",
+             h2: "Long address, ordinary subheading"),
         Page(path: "/pair"),
         Page(path: "/pair/"),
         Page(path: "/insecure", absoluteURL: "http://fx.test/insecure"),
@@ -230,19 +234,20 @@ enum ReportFixture {
                 let title = page.title == auto ? autoTitle(page.path) : page.title
                 let desc = page.desc == auto ? autoDesc(page.path) : page.desc
                 let h1 = page.h1 == auto ? autoH1(page.path) : page.h1
+                let h2 = page.h2 == auto ? autoH2(page.path) : page.h2
                 let canonical: Int64? = page.canonicalTo == "SELF" ? id : page.canonicalTo.flatMap { ids[$0] }
                 try db.execute(
                     sql: """
                         INSERT INTO page_facts
                           (url_id, title, title_length, title_count,
                            meta_description, meta_description_length, meta_description_count,
-                           h1, h1_count, h2_count, canonical_id, canonical_count,
+                           h1, h1_count, h2, h2_count, canonical_id, canonical_count,
                            meta_robots, x_robots_tag, lang, word_count, content_hash)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'en',?,?)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'en',?,?)
                         """,
                     arguments: [id, title, title?.count, page.titleCount,
                                 desc, desc?.count, page.descCount,
-                                h1, page.h1Count, page.h2Count, canonical,
+                                h1, page.h1Count, h2, page.h2Count, canonical,
                                 page.canonicalTo == nil ? 0 : page.canonicalCount,
                                 page.metaRobots, page.xRobots, page.wordCount,
                                 Data((page.contentKey ?? page.path).utf8)])

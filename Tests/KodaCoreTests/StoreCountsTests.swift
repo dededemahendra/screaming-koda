@@ -20,7 +20,7 @@ import Testing
     }
     // Hard-coded on purpose: a filter silently disappearing from a report would
     // otherwise make this test pass by comparing fewer things.
-    #expect(checked == 72, "every filter should have been compared")
+    #expect(checked == 73, "every filter should have been compared")
 }
 
 @Test func everyFilterGetsAKeyEvenWhenItMatchesNothing() throws {
@@ -42,7 +42,7 @@ import Testing
     let store = try Store(path: nil)
     try store.migrate()
     let counts = try store.counts(for: Reports.all)
-    #expect(counts.count == 72)
+    #expect(counts.count == 73)
     #expect(counts.values.allSatisfy { $0 == 0 })
 }
 
