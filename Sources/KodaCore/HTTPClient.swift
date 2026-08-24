@@ -23,6 +23,10 @@ public struct HTTPResponse: Sendable {
         header("content-type")?.split(separator: ";").first.map { String($0).trimmingCharacters(in: .whitespaces) }
     }
 
+    /// Size from the Content-Length header. A HEAD response has no body, so this
+    /// is the only way to learn an asset's size without downloading it.
+    public var declaredContentLength: Int? { header("content-length").flatMap { Int($0) } }
+
     public var isRedirect: Bool { (300...399).contains(status) }
     public var location: String? { header("location") }
 }

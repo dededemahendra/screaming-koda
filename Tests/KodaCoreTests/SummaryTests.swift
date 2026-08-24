@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import KodaCore
 
-private struct SummaryClient: HTTPClient {
+struct SummaryClient: HTTPClient {
     func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
         let pages: [String: (Int, String)] = [
             "https://sum.test/": (200, "<html><head><title>Dup</title></head><body><h1>H</h1><a href='/a'>a</a><a href='/b'>b</a><a href='/c'>c</a></body></html>"),
@@ -39,14 +39,26 @@ private func summarizedCrawl() async throws -> CrawlSummary {
 }
 
 @Test func countsCrawledURLsSeparatelyFromDiscovered() async throws {
+    // With status checks on, everything discovered ends up with a status.
     let s = try await summarizedCrawl()
-    #expect(s.crawledURLs == 4, "the image is discovered but never fetched")
+    #expect(s.crawledURLs == 5)
+    #expect(s.crawledURLs == s.totalURLs)
+
+    // Turning image checking off is what reopens the gap.
+    var config = CrawlConfig(seedURL: "https://sum.test/")
+    config.workers = 2
+    config.checkImages = false
+    let store = try await CrawlSession.start(dbPath: nil, config: config, client: SummaryClient(),
+                                             parser: SwiftSoupParser(), onProgress: nil)
+    let unchecked = try store.summary()
+    #expect(unchecked.crawledURLs == 4)
+    #expect(unchecked.totalURLs == 5)
 }
 
 @Test func groupsStatusCodes() async throws {
     let s = try await summarizedCrawl()
     #expect(s.byStatusClass["2xx"] == 3)
-    #expect(s.byStatusClass["4xx"] == 1)
+    #expect(s.byStatusClass["4xx"] == 2, "/c, plus /i.png which the stub does not serve")
 }
 
 @Test func countsMissingTitles() async throws {

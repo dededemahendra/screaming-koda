@@ -10,6 +10,10 @@ public struct CrawlConfig: Codable, Sendable {
     public var respectRobots: Bool = true
     public var followInternalNofollow: Bool = false
     public var crawlSubdomains: Bool = false
+    /// External links are status-checked with HEAD, never crawled or parsed.
+    public var checkExternalLinks: Bool = true
+    /// Internal images are status-checked with HEAD to record status and size.
+    public var checkImages: Bool = true
     public var maxDepth: Int? = nil
     public var urlCap: Int = 500_000
     public var retainBodies: Bool = true

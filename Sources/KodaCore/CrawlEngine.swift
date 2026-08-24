@@ -4,11 +4,14 @@ public struct CrawlProgress: Sendable {
     public let crawled: Int
     public let queued: Int
     public let discovered: Int
+    /// External links and images given a status in the second phase.
+    public let checked: Int
 
-    public init(crawled: Int, queued: Int, discovered: Int) {
+    public init(crawled: Int, queued: Int, discovered: Int, checked: Int = 0) {
         self.crawled = crawled
         self.queued = queued
         self.discovered = discovered
+        self.checked = checked
     }
 }
 
@@ -21,6 +24,7 @@ public actor CrawlEngine {
 
     private var crawled = 0
     private var discovered = 0
+    private var checked = 0
 
     public init(
         store: Store,
@@ -81,7 +85,8 @@ public actor CrawlEngine {
 
             if let onProgress {
                 let counts = try store.urlCounts()
-                onProgress(CrawlProgress(crawled: crawled, queued: counts.queued, discovered: discovered))
+                onProgress(CrawlProgress(crawled: crawled, queued: counts.queued,
+                                         discovered: discovered, checked: checked))
             }
 
             if let crawlDelay, isDelayed {
@@ -89,7 +94,96 @@ public actor CrawlEngine {
             }
         }
 
+        try await checkRecordedURLs(onProgress: onProgress)
         try store.markFinished(at: Date())
+    }
+
+    /// Second phase: give external links and internal images a status, without
+    /// crawling or parsing either.
+    ///
+    /// This runs after the internal frontier drains rather than interleaved with
+    /// it, so a slow third-party host can never starve the crawl of the site the
+    /// user actually asked about.
+    private func checkRecordedURLs(onProgress: (@Sendable (CrawlProgress) -> Void)?) async throws {
+        guard config.checkExternalLinks || config.checkImages else { return }
+        // One batch here can span dozens of hosts, so the global worker count is
+        // no longer also the per-host count. This is where maxPerHost starts to matter.
+        let limiter = HostLimiter(limit: config.maxPerHost)
+        let batchSize = max(config.workers, 1)
+
+        while true {
+            let batch = try store.claimForStatusCheck(
+                limit: batchSize, maxRedirects: config.maxRedirects,
+                external: config.checkExternalLinks, images: config.checkImages
+            )
+            if batch.isEmpty { break }
+
+            var results: [CrawlResult] = []
+            results.reserveCapacity(batch.count)
+            await withTaskGroup(of: CrawlResult?.self) { group in
+                for item in batch {
+                    group.addTask { [config, client] in
+                        await Self.statusCheck(item: item, config: config, client: client, limiter: limiter)
+                    }
+                }
+                for await result in group {
+                    if let result { results.append(result) }
+                }
+            }
+
+            let produced = Set(results.map(\.urlID))
+            for item in batch where !produced.contains(item.id) {
+                try store.markSkipped(item.id)
+            }
+            if !results.isEmpty {
+                checked += results.count
+                _ = try store.write(results: results, config: config, now: Date())
+            }
+            if let onProgress {
+                let counts = try store.urlCounts()
+                onProgress(CrawlProgress(crawled: crawled, queued: counts.queued,
+                                         discovered: discovered, checked: checked))
+            }
+        }
+    }
+
+    /// HEAD, falling back to GET when a server rejects the method. Plenty of
+    /// servers answer HEAD with 405 or 501 while serving GET perfectly well, and
+    /// reporting that as the link's status would be wrong.
+    private static func statusCheck(
+        item: FrontierItem, config: CrawlConfig, client: any HTTPClient, limiter: HostLimiter
+    ) async -> CrawlResult? {
+        await limiter.acquire(host: item.url.host)
+        var outcome = await client.fetch(url: item.url.absoluteString, method: "HEAD",
+                                         userAgent: config.userAgent, timeout: config.timeout)
+        if case .response(let response) = outcome, response.status == 405 || response.status == 501 {
+            outcome = await client.fetch(url: item.url.absoluteString, method: "GET",
+                                         userAgent: config.userAgent, timeout: config.timeout)
+        }
+        await limiter.release(host: item.url.host)
+
+        switch outcome {
+        case .failure(let kind):
+            return CrawlResult(
+                urlID: item.id, url: item.url, depth: item.depth, status: 0, errorKind: kind,
+                contentType: nil, contentLength: nil, responseTimeMs: 0,
+                redirectTarget: nil, bodyGz: nil, xRobotsTag: nil, facts: nil
+            )
+        case .response(let response):
+            let redirectTarget = response.isRedirect
+                ? response.location.flatMap { URLNormalizer.normalize($0, relativeTo: item.url) }
+                : nil
+            return CrawlResult(
+                urlID: item.id, url: item.url, depth: item.depth,
+                status: response.status, errorKind: nil,
+                contentType: response.contentType,
+                // A HEAD response has no body, so the header is the only size source.
+                contentLength: response.declaredContentLength ?? response.body?.count,
+                responseTimeMs: response.elapsedMs,
+                redirectTarget: redirectTarget, bodyGz: nil,
+                xRobotsTag: response.header("x-robots-tag"), facts: nil
+            )
+        }
     }
 
     private static func process(

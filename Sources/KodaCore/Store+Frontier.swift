@@ -108,3 +108,48 @@ extension Store {
         }
     }
 }
+
+extension Store {
+    /// Claims URLs that were recorded but never fetched and that deserve a status
+    /// check: external links, and internal images.
+    ///
+    /// Deliberately restricted to `state = 3` rows. Internal URLs skipped by a
+    /// depth limit, an exclude rule or the URL cap are also state 3, so the image
+    /// arm additionally requires membership in `images` — otherwise a `--max-depth`
+    /// crawl would quietly fetch everything it had just decided not to.
+    public func claimForStatusCheck(limit: Int, maxRedirects: Int, external: Bool, images: Bool) throws -> [FrontierItem] {
+        guard external || images else { return [] }
+        return try dbQueue.write { db in
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT id, url, depth FROM urls
+                    WHERE state = 3
+                      AND redirect_hops <= ?
+                      AND id NOT IN (SELECT url_id FROM responses)
+                      AND ( (? = 1 AND is_internal = 0)
+                         OR (? = 1 AND is_internal = 1 AND id IN (SELECT src_url_id FROM images)) )
+                    ORDER BY id
+                    LIMIT ?
+                    """,
+                arguments: [maxRedirects, external ? 1 : 0, images ? 1 : 0, limit]
+            )
+            guard !rows.isEmpty else { return [] }
+            let ids = rows.map { $0["id"] as Int64 }
+            let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")
+            try db.execute(sql: "UPDATE urls SET state = 1 WHERE id IN (\(placeholders))",
+                           arguments: StatementArguments(ids))
+
+            var items: [FrontierItem] = []
+            for row in rows {
+                let id: Int64 = row["id"]
+                if let normalized = URLNormalizer.normalize(row["url"], relativeTo: nil) {
+                    items.append(FrontierItem(id: id, url: normalized, depth: row["depth"]))
+                } else {
+                    try Self.setState(db, id: id, state: 3)
+                }
+            }
+            return items
+        }
+    }
+}

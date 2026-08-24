@@ -59,7 +59,11 @@ extension Store {
                     WHERE (f.h1 IS NULL OR f.h1 = '') AND r.status = 200
                     """),
                 imagesMissingAlt: try count("SELECT count(*) FROM images WHERE alt IS NULL OR alt = ''"),
-                maxDepth: try count("SELECT coalesce(max(u.depth), 0) FROM urls u JOIN responses r ON r.url_id = u.id")
+                // Joined against page_facts, not responses: only parsed HTML pages
+                // count. Images and other assets are fetched now, and letting an
+                // asset one level below a page inflate "max depth" would misreport
+                // how deep the site actually is.
+                maxDepth: try count("SELECT coalesce(max(u.depth), 0) FROM urls u JOIN page_facts f ON f.url_id = u.id")
             )
         }
     }

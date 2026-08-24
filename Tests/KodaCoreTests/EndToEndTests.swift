@@ -107,13 +107,38 @@ private func withFixtureServer<T>(_ body: (FixtureServer) async throws -> T) asy
         return try store.summary()
     }
 
-    #expect(summary.byStatusClass["2xx"] == 3, "index, about, dupe")
+    #expect(summary.byStatusClass["2xx"] == 5, "index, about, dupe, and both images")
     #expect(summary.byStatusClass["4xx"] == 1, "missing.html")
     #expect(summary.duplicateTitles == 2, "'Shared Title' on about and dupe")
     #expect(summary.missingDescriptions == 1, "dupe.html")
     #expect(summary.missingH1 == 1, "dupe.html")
     #expect(summary.imagesMissingAlt == 1, "noalt.png")
     #expect(summary.transportErrors == 0)
+}
+
+@Test func imagesAreStatusCheckedWithHeadOverRealHTTP() async throws {
+    let sizes = try await withFixtureServer { server in
+        var config = CrawlConfig(seedURL: "http://127.0.0.1:\(server.port)/index.html")
+        config.workers = 2
+
+        let store = try await CrawlSession.start(
+            dbPath: nil, config: config,
+            client: URLSessionHTTPClient(), parser: SwiftSoupParser(), onProgress: nil
+        )
+        return try await store.dbQueue.read { db in
+            try Row.fetchAll(db, sql: """
+                SELECT u.path AS path, r.status AS status, r.content_length AS bytes
+                FROM images i
+                JOIN urls u ON u.id = i.src_url_id
+                JOIN responses r ON r.url_id = u.id
+                ORDER BY u.path
+                """).map { ($0["path"] as String, $0["status"] as Int, $0["bytes"] as Int?) }
+        }
+    }
+    #expect(sizes.map(\.0) == ["/noalt.png", "/pic.png"])
+    #expect(sizes.allSatisfy { $0.1 == 200 })
+    // HEAD returns no body, so a size at all proves Content-Length was read.
+    #expect(sizes.allSatisfy { ($0.2 ?? 0) > 0 }, "size comes from the HEAD response header")
 }
 
 @Test func robotsBlockedPathIsNotFetched() async throws {

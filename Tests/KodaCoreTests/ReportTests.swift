@@ -155,7 +155,7 @@ private func firstColumn(_ rows: [[String?]]) -> [String] {
     let store = try await crawledStore()
     let counts = try store.reportCounts()
     #expect(counts.count == ReportCatalogue.all.count)
-    #expect(counts["response-4xx"] == 1)
+    #expect(counts["response-4xx"] == 4, "/gone, the external link, and two images")
 }
 
 @Test func pagingSlicesTheSameRows() async throws {
@@ -213,10 +213,12 @@ private func firstColumn(_ rows: [[String?]]) -> [String] {
 @Test func findsBrokenLinksWithTheirSourcePage() async throws {
     let store = try await crawledStore()
     let rows = try store.runReport(ReportCatalogue.report(id: "response-broken-links")!)
-    #expect(rows.count == 1)
-    #expect(rows[0][0] == "https://rep.test/")
-    #expect(rows[0][1] == "https://rep.test/gone")
-    #expect(rows[0][2] == "404")
+    // Both the internal 404 and the external one: status checking is what makes
+    // broken outbound links visible at all.
+    #expect(rows.count == 2)
+    #expect(rows.allSatisfy { $0[0] == "https://rep.test/" })
+    #expect(rows.map { $0[1] } == ["https://ext.test/x", "https://rep.test/gone"])
+    #expect(rows.allSatisfy { $0[2] == "404" })
 }
 
 @Test func findsRedirectLoops() async throws {
@@ -250,13 +252,13 @@ private func firstColumn(_ rows: [[String?]]) -> [String] {
             == ["https://rep.test/"])
 }
 
-@Test func listsExternalURLsWithoutCrawlingThem() async throws {
+@Test func listsExternalURLsWithTheirStatus() async throws {
     let store = try await crawledStore()
     let rows = try store.runReport(ReportCatalogue.report(id: "external-all")!)
     #expect(rows.count == 1)
     #expect(rows[0][0] == "https://ext.test/x")
-    #expect(rows[0][2] == nil, "external URLs are not fetched, so there is no status yet")
-    #expect(rows[0][3] == "1")
+    #expect(rows[0][2] == "404", "external links are status-checked")
+    #expect(rows[0][3] == "1", "and carry the count of pages linking to them")
 }
 
 @Test func reportsDepthDistribution() async throws {

@@ -333,6 +333,41 @@ public enum ReportCatalogue {
                 """
         ),
 
+        ReportDefinition(
+            id: "images-over-100kb",
+            group: "Images",
+            name: "Over 100KB",
+            summary: "Images large enough to hurt page load. Size comes from the HEAD status check.",
+            columns: ["Image", "Bytes", "On pages"],
+            sql: """
+                SELECT src.url AS "Image", r.content_length AS "Bytes",
+                       count(DISTINCT i.url_id) AS "On pages"
+                FROM images i
+                JOIN urls src ON src.id = i.src_url_id
+                JOIN responses r ON r.url_id = src.id
+                WHERE r.content_length > 102400
+                GROUP BY src.id
+                ORDER BY r.content_length DESC
+                """
+        ),
+
+        ReportDefinition(
+            id: "images-broken",
+            group: "Images",
+            name: "Broken",
+            summary: "Image references that do not return 200.",
+            columns: ["Image", "Status", "On page"],
+            sql: """
+                SELECT src.url AS "Image", r.status AS "Status", page.url AS "On page"
+                FROM images i
+                JOIN urls src ON src.id = i.src_url_id
+                JOIN urls page ON page.id = i.url_id
+                JOIN responses r ON r.url_id = src.id
+                WHERE r.status = 0 OR r.status >= 400
+                ORDER BY page.url, src.url
+                """
+        ),
+
         // MARK: - Canonicals
 
         pageReport(

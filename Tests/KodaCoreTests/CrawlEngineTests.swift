@@ -81,16 +81,32 @@ private func runCrawl(config: CrawlConfig? = nil) async throws -> Store {
     #expect(status == 404)
 }
 
-@Test func externalLinksAreRecordedButNotCrawled() async throws {
+@Test func externalLinksAreStatusCheckedButNeverParsed() async throws {
     let store = try await runCrawl()
     try await store.dbQueue.read { db in
         let external = try Int.fetchOne(db, sql: "SELECT count(*) FROM urls WHERE host = 'external.test'")
         #expect(external == 1)
-        let fetched = try Int.fetchOne(db, sql: """
+        let checked = try Int.fetchOne(db, sql: """
             SELECT count(*) FROM responses r JOIN urls u ON u.id = r.url_id WHERE u.host = 'external.test'
             """)
-        #expect(fetched == 0, "external URLs are not fetched in M1")
+        #expect(checked == 1, "external links get a status")
+        let parsed = try Int.fetchOne(db, sql: """
+            SELECT count(*) FROM page_facts f JOIN urls u ON u.id = f.url_id WHERE u.host = 'external.test'
+            """)
+        #expect(parsed == 0, "but are never parsed, so they contribute no facts or links")
     }
+}
+
+@Test func externalCheckingCanBeTurnedOff() async throws {
+    var config = CrawlConfig(seedURL: "https://site.test/")
+    config.checkExternalLinks = false
+    let store = try await runCrawl(config: config)
+    let checked = try await store.dbQueue.read { db in
+        try Int.fetchOne(db, sql: """
+            SELECT count(*) FROM responses r JOIN urls u ON u.id = r.url_id WHERE u.is_internal = 0
+            """) ?? 0
+    }
+    #expect(checked == 0)
 }
 
 @Test func duplicateTitlesAreQueryable() async throws {
@@ -122,8 +138,15 @@ private func runCrawl(config: CrawlConfig? = nil) async throws -> Store {
     var config = CrawlConfig(seedURL: "https://site.test/")
     config.maxDepth = 0
     let store = try await runCrawl(config: config)
-    let fetched = try await store.dbQueue.read { db in try Int.fetchOne(db, sql: "SELECT count(*) FROM responses") ?? 0 }
-    #expect(fetched == 1, "only the seed is crawled at depth 0")
+    // The seed is the only page crawled. Its external link still gets a status:
+    // depth limits govern how far the crawl walks, not whether a link it already
+    // found is checked.
+    let pages = try await store.dbQueue.read { db in
+        try Int.fetchOne(db, sql: """
+            SELECT count(*) FROM responses r JOIN urls u ON u.id = r.url_id WHERE u.is_internal = 1
+            """) ?? 0
+    }
+    #expect(pages == 1, "only the seed is crawled at depth 0")
 }
 
 @Test func robotsDisallowSkipsURL() async throws {
