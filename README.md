@@ -3,8 +3,8 @@
 A headless SEO site crawler in Swift. It fetches a site, records what it finds in
 a SQLite database, and reports on it. No UI, no Xcode required.
 
-This repository is the headless half of the tool: the crawler, the report
-catalogue, and a CLI. The desktop app shell is a later milestone.
+There are two ways to use it: a CLI, and a macOS app that crawls and browses
+results live.
 
 ## Requirements
 
@@ -15,8 +15,28 @@ catalogue, and a CLI. The desktop app shell is a later milestone.
 ## Build
 
 ```bash
-swift build -c release
+swift build -c release      # the koda CLI
+./Scripts/build-app.sh      # build/ScreamingKoda.app
 ```
+
+SwiftPM only produces a bare executable. The script wraps it in a bundle,
+without which a SwiftUI app gets no Dock icon, no menu bar and cannot be brought
+to the front.
+
+## The app
+
+`ScreamingKoda.app` crawls and browses in one window: a toolbar with the seed
+URL and Start/Stop, a sidebar of reports with live counts, a results table, and
+an inspector showing the selected URL's details, inlinks, outlinks and images.
+
+Results can be browsed while the crawl is still running. Stop leaves the
+frontier intact, so Start becomes Resume. Opening a `.koda` file (double-click,
+or `open -a ScreamingKoda site.koda`) browses a finished crawl without crawling,
+including one the CLI produced.
+
+Table columns sort by clicking their header and the filter box narrows across
+every column. Both re-query rather than sorting in memory, so they cost the same
+on a half-million-row crawl as on a small one.
 
 ## Usage
 
@@ -144,8 +164,20 @@ tests can run in parallel.
 
 ## Layout
 
-- `Sources/KodaCore` is the library. It never imports AppKit or SwiftUI so it can
-  run headless.
-- `Sources/koda` is the CLI.
-- `docs/superpowers/specs` and `docs/superpowers/plans` hold the design and the
-  M1 implementation plan.
+| Path | Imports | Holds |
+| --- | --- | --- |
+| `Sources/KodaCore` | Foundation, GRDB, SwiftSoup | Crawling, storage, reports |
+| `Sources/KodaUI` | KodaCore, Observation | Observable models for the app |
+| `Sources/KodaApp` | KodaUI, SwiftUI, AppKit | Views |
+| `Sources/koda` | KodaCore, ArgumentParser | The CLI |
+
+`KodaCore` and `KodaUI` never import AppKit or SwiftUI. That keeps the crawler
+headless and keeps the models testable, because there is no UI test harness
+under Command Line Tools. `Scripts/check-layering.sh` enforces it.
+
+The results table is `NSTableView` behind `NSViewRepresentable`, fed by an LRU
+cache of row windows over paged SQL. SwiftUI's `Table` wants the whole
+collection, and never holding the whole row set is the point.
+
+`docs/superpowers/specs` and `docs/superpowers/plans` hold the design and the
+milestone plans.
