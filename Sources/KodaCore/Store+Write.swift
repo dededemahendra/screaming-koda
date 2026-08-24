@@ -15,15 +15,20 @@ extension Store {
                     sql: """
                         INSERT INTO responses
                           (url_id, status, error_kind, content_type, content_length,
-                           response_time_ms, redirect_target_id, fetched_at, body_gz, headers_json)
-                        VALUES (?,?,?,?,?,?,?,?,?,?)
+                           response_time_ms, redirect_target_id, fetched_at, body_gz, headers_json,
+                           rendered, render_ms, js_errors, rendered_words, static_words)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(url_id) DO UPDATE SET
                           status=excluded.status, error_kind=excluded.error_kind,
                           content_type=excluded.content_type, content_length=excluded.content_length,
                           response_time_ms=excluded.response_time_ms,
                           redirect_target_id=excluded.redirect_target_id,
                           fetched_at=excluded.fetched_at, body_gz=excluded.body_gz,
-                          headers_json=excluded.headers_json
+                          headers_json=excluded.headers_json,
+                          rendered=excluded.rendered, render_ms=excluded.render_ms,
+                          js_errors=excluded.js_errors,
+                          rendered_words=excluded.rendered_words,
+                          static_words=excluded.static_words
                         """,
                     arguments: [
                         result.urlID, result.status, result.errorKind, result.contentType,
@@ -35,6 +40,11 @@ extension Store {
                         result.headers.isEmpty ? nil
                             : String(data: (try? JSONEncoder().encode(result.headers)) ?? Data(),
                                      encoding: .utf8),
+                        result.render == nil ? 0 : 1,
+                        result.render?.elapsedMs,
+                        result.render.flatMap { $0.errors.isEmpty ? nil : $0.errors.joined(separator: "\n") },
+                        result.render?.renderedWords,
+                        result.render?.staticWords,
                     ]
                 )
 

@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "KodaCore", targets: ["KodaCore"]),
+        .library(name: "KodaRender", targets: ["KodaRender"]),
         .executable(name: "koda", targets: ["koda"]),
         .executable(name: "KodaApp", targets: ["KodaApp"]),
     ],
@@ -35,6 +36,7 @@ let package = Package(
             name: "koda",
             dependencies: [
                 "KodaCore",
+                "KodaRender",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
@@ -46,13 +48,28 @@ let package = Package(
             ],
             resources: [.copy("Fixtures")]
         ),
+        // WebKit lives here, not in KodaCore: rendering needs a UI framework and
+        // a main-thread run loop, and KodaCore's defining property is that it
+        // builds and tests headless. KodaCore declares the protocol; this
+        // implements it; the app and CLI inject it.
+        .target(
+            name: "KodaRender",
+            dependencies: ["KodaCore"]
+        ),
+        .testTarget(
+            name: "KodaRenderTests",
+            dependencies: [
+                "KodaRender",
+                .product(name: "Testing", package: "swift-testing"),
+            ]
+        ),
         .target(
             name: "KodaUI",
             dependencies: ["KodaCore"]
         ),
         .executableTarget(
             name: "KodaApp",
-            dependencies: ["KodaUI"]
+            dependencies: ["KodaUI", "KodaRender"]
         ),
         .testTarget(
             name: "KodaUITests",

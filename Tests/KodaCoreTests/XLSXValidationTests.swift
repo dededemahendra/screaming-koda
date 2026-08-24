@@ -118,5 +118,5 @@ private let sample = [
         wb = ET.fromstring(z.read('xl/workbook.xml'))
         print(len(wb.find(NS + 'sheets')))
         """
-    #expect(try validate(data, script: script) == "21")
+    #expect(try validate(data, script: script) == "22")
 }

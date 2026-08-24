@@ -224,6 +224,20 @@ public enum Reports {
             id: "usedOn", header: "Used On",
             expression: "(SELECT count(DISTINCT res.url_id) FROM resources res WHERE res.src_url_id = u.id)",
             width: 75, alignment: .trailing)
+        static let renderedFlag = ReportColumn(
+            id: "rendered", header: "Rendered",
+            expression: "CASE WHEN r.rendered = 1 THEN 'Yes' ELSE 'No' END", width: 80)
+        static let renderMs = ReportColumn(id: "renderMs", header: "Render ms",
+                                           expression: "r.render_ms",
+                                           width: 80, alignment: .trailing)
+        static let jsErrors = ReportColumn(id: "jsErrors", header: "JavaScript Errors",
+                                           expression: "r.js_errors", width: 320)
+        static let renderedWords = ReportColumn(id: "renderedWords", header: "Rendered Words",
+                                                expression: "r.rendered_words",
+                                                width: 110, alignment: .trailing)
+        static let staticWords = ReportColumn(id: "staticWords", header: "Static Words",
+                                              expression: "r.static_words",
+                                              width: 100, alignment: .trailing)
         static let inSitemap = ReportColumn(
             id: "inSitemap", header: "In Sitemap",
             expression: "CASE WHEN u.in_sitemap = 1 THEN 'Yes' ELSE 'No' END", width: 90)
@@ -246,6 +260,7 @@ public enum Reports {
         images, canonicals, directives, hreflang, pageDepth,
         content, urlStructure, anchorText,
         social, structuredData, pagination, security, extraction, sitemap, resources,
+        javascript,
     ]
 
     public static let internalURLs = Report(
@@ -752,6 +767,39 @@ public enum Reports {
                          predicate: "r.content_length > 102400", isIssue: true),
             ReportFilter(id: "insecure", name: "Loaded over HTTP",
                          predicate: "u.url NOT LIKE 'https://%'", isIssue: true),
+        ])
+
+    /// What rendering changed, and what it cost.
+    ///
+    /// Empty unless `renderJavaScript` is on. The column worth looking at is the
+    /// gap between rendered and static word counts: it answers the only question
+    /// that matters here, which is whether this site needs rendering or whether
+    /// rendering it is merely expensive.
+    public static let javascript = Report(
+        id: "javascript", name: "JavaScript",
+        predicate: "u.is_internal = 1 AND r.status IS NOT NULL AND \(pageRows)",
+        columns: [Col.address, Col.renderedFlag, Col.renderMs, Col.staticWords,
+                  Col.renderedWords, Col.jsErrors, Col.title],
+        filters: [
+            allFilter,
+            ReportFilter(id: "rendered", name: "Rendered", predicate: "r.rendered = 1"),
+            ReportFilter(id: "errors", name: "JavaScript errors",
+                         predicate: "r.js_errors IS NOT NULL AND trim(r.js_errors) != ''",
+                         isIssue: true),
+            // A page whose content only exists after scripts run is invisible to
+            // any crawler that does not render — including, historically, this one.
+            ReportFilter(id: "contentNeedsJS", name: "Content only appears after rendering",
+                         predicate: """
+                r.rendered = 1 AND r.rendered_words > coalesce(r.static_words, 0) * 2
+                AND r.rendered_words > 50
+                """, isIssue: true),
+            ReportFilter(id: "emptyWithoutJS", name: "Nothing at all without JavaScript",
+                         predicate: "r.rendered = 1 AND coalesce(r.static_words, 0) < 10",
+                         isIssue: true),
+            ReportFilter(id: "slow", name: "Slow to render (over 3s)",
+                         predicate: "r.render_ms > 3000", isIssue: true),
+            ReportFilter(id: "notRendered", name: "Not rendered",
+                         predicate: "r.rendered = 0"),
         ])
 
     public static let pageDepth = Report(

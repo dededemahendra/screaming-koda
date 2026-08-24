@@ -100,6 +100,9 @@ public final class CrawlController {
     /// which is what every existing test relies on.
     @ObservationIgnored private let crawlsDirectory: (@MainActor @Sendable () -> URL)?
     @ObservationIgnored private let settings: CrawlSettings?
+    /// Injected by the app, which owns the WebKit dependency. A bare controller
+    /// has none, so rendering is simply unavailable in tests that do not ask.
+    @ObservationIgnored private let makeRenderer: (@Sendable () -> PageRenderer)?
     @ObservationIgnored private var engine: CrawlEngine?
     /// Kept so the sidebar counts and the inspector can query after the crawl
     /// task has finished with it. Internal rather than private so tests can
@@ -143,13 +146,15 @@ public final class CrawlController {
         parser: PageParser = SwiftSoupParser(),
         dbPath: String? = nil,
         crawlsDirectory: (@MainActor @Sendable () -> URL)? = nil,
-        settings: CrawlSettings? = nil
+        settings: CrawlSettings? = nil,
+        makeRenderer: (@Sendable () -> PageRenderer)? = nil
     ) {
         self.client = client
         self.parser = parser
         self.dbPath = dbPath
         self.crawlsDirectory = crawlsDirectory
         self.settings = settings
+        self.makeRenderer = makeRenderer
         self.config = settings?.config ?? CrawlSettings.clamped(CrawlConfig(seedURL: ""))
     }
 
@@ -238,7 +243,8 @@ public final class CrawlController {
                        sitemap: SitemapOutcome)
         do {
             prepared = try await CrawlSession.prepare(
-                dbPath: dbPath, config: config, client: client, parser: parser
+                dbPath: dbPath, config: config, client: client, parser: parser,
+                renderer: config.renderJavaScript ? makeRenderer?() : nil
             )
         } catch {
             notice = "Cannot start: \(error)"

@@ -26,6 +26,9 @@ public actor CrawlEngine {
     private let parser: PageParser
     private let config: CrawlConfig
     private let robots: RobotsRules
+    /// Injected, and nil unless the caller supplied one — `KodaCore` cannot
+    /// build a renderer itself without taking a dependency on WebKit.
+    private let renderer: PageRenderer?
 
     private var crawled = 0
     private var discovered = 0
@@ -38,13 +41,15 @@ public actor CrawlEngine {
         client: HTTPClient,
         parser: PageParser,
         config: CrawlConfig,
-        robots: RobotsRules = .allowAll
+        robots: RobotsRules = .allowAll,
+        renderer: PageRenderer? = nil
     ) {
         self.store = store
         self.client = client
         self.parser = parser
         self.config = config
         self.robots = robots
+        self.renderer = renderer
     }
 
     public var state: CrawlState { currentState }
@@ -126,9 +131,10 @@ public actor CrawlEngine {
 
                 await withTaskGroup(of: CrawlResult?.self) { group in
                     for item in batch {
-                        group.addTask { [config, robots, client, parser, retainBodies] in
+                        group.addTask { [config, robots, client, parser, retainBodies, renderer] in
                             await Self.process(item: item, config: config, robots: robots,
-                                               client: client, parser: parser, retainBodies: retainBodies)
+                                               client: client, parser: parser,
+                                               retainBodies: retainBodies, renderer: renderer)
                         }
                     }
                     for await result in group {
@@ -223,7 +229,8 @@ public actor CrawlEngine {
 
     private static func process(
         item: FrontierItem, config: CrawlConfig, robots: RobotsRules,
-        client: HTTPClient, parser: PageParser, retainBodies: Bool
+        client: HTTPClient, parser: PageParser, retainBodies: Bool,
+        renderer: PageRenderer?
     ) async -> CrawlResult? {
         // `robots` is the ruleset fetched once for the SEED host (CrawlSession never
         // fetches robots.txt for other hosts — one HEAD per unique URL is the agreed
@@ -258,6 +265,7 @@ public actor CrawlEngine {
 
             var facts: PageFacts?
             var bodyGz: Data?
+            var render: RenderOutcome?
             let isHTML = response.contentType?.contains("html") == true
 
             if !isHTML, let body = response.body, !body.isEmpty,
@@ -276,6 +284,25 @@ public actor CrawlEngine {
                 let html = TextDecoding.decode(body, contentType: response.contentType)
                 facts = try? parser.parse(html: html, extractions: config.extractions)
                 if retainBodies { bodyGz = Gzip.compress(body) }
+
+                if config.renderJavaScript, let renderer, !item.checkOnly {
+                    // The static parse above is kept whatever happens next. A
+                    // render that fails leaves the page exactly as a non-rendered
+                    // crawl would have it, rather than losing it — the same rule
+                    // the rest of the crawler follows: never die from a bad page.
+                    if let rendered = try? await renderer.render(
+                        url: item.url.absoluteString,
+                        timeout: config.renderTimeout, settleMs: config.renderSettleMs),
+                       let renderedFacts = try? parser.parse(html: rendered.html,
+                                                             extractions: config.extractions) {
+                        render = RenderOutcome(elapsedMs: rendered.elapsedMs,
+                                               errors: rendered.errors,
+                                               renderedWords: renderedFacts.wordCount,
+                                               staticWords: facts?.wordCount ?? 0)
+                        facts = renderedFacts
+                        if retainBodies { bodyGz = Gzip.compress(Data(rendered.html.utf8)) }
+                    }
+                }
             }
 
             return CrawlResult(
@@ -286,7 +313,7 @@ public actor CrawlEngine {
                 responseTimeMs: response.elapsedMs,
                 redirectTarget: redirectTarget, bodyGz: bodyGz,
                 xRobotsTag: response.header("x-robots-tag"), headers: response.headers,
-                facts: facts
+                render: render, facts: facts
             )
         }
     }

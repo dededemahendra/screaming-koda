@@ -218,6 +218,18 @@ public final class Store: @unchecked Sendable {
                 CREATE INDEX idx_resources_src ON resources(src_url_id);
                 """)
         }
+        m.registerMigration("v9-rendering") { db in
+            try db.execute(sql: """
+                ALTER TABLE responses ADD COLUMN rendered INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE responses ADD COLUMN render_ms INTEGER;
+                ALTER TABLE responses ADD COLUMN js_errors TEXT;
+                -- How much of the page only exists after scripts run. The single
+                -- most useful number a rendered crawl produces: it says whether
+                -- rendering this site is necessary or merely expensive.
+                ALTER TABLE responses ADD COLUMN rendered_words INTEGER;
+                ALTER TABLE responses ADD COLUMN static_words INTEGER;
+                """)
+        }
         return m
     }
 

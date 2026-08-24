@@ -63,6 +63,24 @@ public struct CrawlConfig: Codable, Sendable {
     /// the "images over 100KB" report.
     public var checkImages: Bool = true
 
+    /// Render pages in a real browser engine before parsing them.
+    ///
+    /// Off by default, and it is the most expensive switch in the tool: a
+    /// rendered page costs a browser process and hundreds of milliseconds
+    /// instead of one HTTP request and a parse. Rendering a 50,000-page site is
+    /// a different proposition from crawling one. Turn it on for a site that
+    /// renders its content client-side, where a static crawl reports empty
+    /// titles and no links — which is a limitation of the crawl, not the site.
+    public var renderJavaScript: Bool = false
+    /// How long a single page may take to render before it is abandoned.
+    public var renderTimeout: TimeInterval = 20
+    /// How long to let a page's own scripts settle after load before reading the
+    /// DOM. Hydration and lazy content usually land in the first few hundred ms.
+    public var renderSettleMs: Int = 400
+    /// How many pages may render at once. Each is a browser process, so this is
+    /// memory rather than merely parallelism.
+    public var renderConcurrency: Int = 2
+
     /// Fetch stylesheets and scripts with HEAD to record status and size.
     ///
     /// Off by default, unlike images. A broken stylesheet is a real finding, but

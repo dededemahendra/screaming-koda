@@ -112,6 +112,22 @@ public struct ConfigSheet: View {
                     Text("One per line, as Name: Value.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                Section("JavaScript rendering") {
+                    Toggle("Render pages in a browser engine", isOn: $draft.renderJavaScript)
+                    Text("Far slower: a browser process and hundreds of milliseconds per page "
+                         + "instead of one request. Worth it for a site that builds its content "
+                         + "client-side, where a static crawl finds empty titles and no links.")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if draft.renderJavaScript {
+                        Stepper("Pages at once: \(draft.renderConcurrency)",
+                                value: $draft.renderConcurrency, in: 1...8)
+                        LabeledContent("Settle time (ms)") {
+                            TextField("", value: $draft.renderSettleMs, format: .number)
+                                .frame(width: 70)
+                        }
+                    }
+                }
                 Section("URL filters") {
                     Text("One regular expression per line. Include, when non-empty, "
                          + "restricts the crawl to matching URLs; Exclude always wins.")

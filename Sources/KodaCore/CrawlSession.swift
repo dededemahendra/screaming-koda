@@ -162,7 +162,8 @@ public enum CrawlSession {
         dbPath: String?,
         config: CrawlConfig,
         client: HTTPClient,
-        parser: PageParser
+        parser: PageParser,
+        renderer: PageRenderer? = nil
     ) async throws -> (engine: CrawlEngine, store: Store, robotsOutcome: RobotsFetchOutcome,
                        sitemap: SitemapOutcome) {
         guard let seed = URLNormalizer.normalize(config.seedURL, relativeTo: nil) else {
@@ -200,7 +201,7 @@ public enum CrawlSession {
         }
 
         let engine = CrawlEngine(store: store, client: client, parser: parser,
-                                 config: config, robots: robots)
+                                 config: config, robots: robots, renderer: renderer)
         return (engine, store, outcome, sitemapReport)
     }
 
@@ -216,10 +217,11 @@ public enum CrawlSession {
         config: CrawlConfig,
         client: HTTPClient,
         parser: PageParser,
+        renderer: PageRenderer? = nil,
         onProgress: (@Sendable (CrawlProgress) -> Void)?
     ) async throws -> (store: Store, robotsOutcome: RobotsFetchOutcome) {
         let (engine, store, outcome, _) = try await prepare(
-            dbPath: dbPath, config: config, client: client, parser: parser
+            dbPath: dbPath, config: config, client: client, parser: parser, renderer: renderer
         )
         try await engine.run(onProgress: onProgress)
         return (store, outcome)

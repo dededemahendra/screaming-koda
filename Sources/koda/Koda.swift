@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import KodaCore
+import KodaRender
 
 @main
 struct Koda: AsyncParsableCommand {
@@ -55,6 +56,12 @@ struct Crawl: AsyncParsableCommand {
     @Option(name: .long, help: "Extra request header as Name:Value. Repeatable.")
     var header: [String] = []
 
+    @Flag(name: .long, help: "Render pages in a browser engine before parsing. Much slower.")
+    var render = false
+
+    @Option(name: .long, help: "How many pages may render at once.")
+    var renderConcurrency: Int = 2
+
     mutating func run() async throws {
         var config = CrawlConfig(seedURL: url)
         config.workers = workers
@@ -65,6 +72,8 @@ struct Crawl: AsyncParsableCommand {
         config.discoverSitemaps = !noSitemapDiscovery
         config.listModeOnly = listMode
         config.checkResources = checkResources
+        config.renderJavaScript = render
+        config.renderConcurrency = max(1, renderConcurrency)
         config.basicAuthUser = user ?? ""
         config.basicAuthPassword = password ?? ""
         for entry in header {
@@ -100,6 +109,9 @@ struct Crawl: AsyncParsableCommand {
         let (store, robotsOutcome) = try await CrawlSession.start(
             dbPath: path, config: config,
             client: URLSessionHTTPClient(), parser: SwiftSoupParser(),
+            // Constructed here, in the executable, and injected: KodaCore has no
+            // WebKit dependency and cannot build one itself.
+            renderer: render ? WebKitRenderer(poolSize: config.renderConcurrency) : nil,
             onProgress: { progress in
                 FileHandle.standardError.write(
                     Data("\rcrawled \(progress.crawled)  queued \(progress.queued)".utf8)
