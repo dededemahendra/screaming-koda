@@ -9,7 +9,7 @@ struct Koda: AsyncParsableCommand {
         commandName: "koda",
         abstract: "Crawl a site and report on it.",
         version: KodaCoreInfo.versionString,
-        subcommands: [Crawl.self, Export.self, Compare.self, Enrich.self],
+        subcommands: [Crawl.self, Export.self, Compare.self, Enrich.self, Schedule.self],
         defaultSubcommand: Crawl.self
     )
 }
@@ -531,5 +531,114 @@ struct Enrich: AsyncParsableCommand {
         out.mozAccessID = env["KODA_MOZ_ACCESS_ID"] ?? ""
         out.mozSecretKey = env["KODA_MOZ_SECRET"] ?? ""
         return out
+    }
+}
+
+
+struct Schedule: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Run a crawl on a schedule, using launchd.",
+        discussion: """
+            launchd rather than a timer inside the app: a schedule that only runs \
+            while the app happens to be open is not a schedule. The job survives \
+            a reboot and runs whether or not anyone has opened Koda.
+            """)
+
+    @Option(name: .long, help: "Site to crawl.")
+    var url: String?
+
+    @Option(name: .long, help: "Where to write the crawl.")
+    var db: String?
+
+    @Option(name: .long, help: "Hour, 0 to 23, local time.")
+    var hour: Int = 3
+
+    @Option(name: .long, help: "Minute.")
+    var minute: Int = 0
+
+    @Option(name: .long, help: "Day of week, 0 Sunday to 6. Omit for every day.")
+    var weekday: Int?
+
+    @Flag(name: .long, help: "Do not write a workbook after each crawl.")
+    var noExport = false
+
+    @Flag(name: .long, help: "Print the launchd job instead of installing it.")
+    var dryRun = false
+
+    @Option(name: .long, help: "Remove an installed schedule by its id.")
+    var remove: String?
+
+    @Flag(name: .long, help: "List installed schedules.")
+    var list = false
+
+    mutating func run() async throws {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let agents = home.appendingPathComponent("Library/LaunchAgents")
+
+        if list {
+            let installed = (try? FileManager.default.contentsOfDirectory(atPath: agents.path))?
+                .filter { $0.hasPrefix("co.sistercreatives.koda.") } ?? []
+            if installed.isEmpty { Crawl.logLine("No schedules installed."); return }
+            for name in installed.sorted() { Crawl.logLine("  \(name)") }
+            return
+        }
+
+        if let remove {
+            let path = agents.appendingPathComponent("co.sistercreatives.koda.\(remove).plist")
+            guard FileManager.default.fileExists(atPath: path.path) else {
+                throw ValidationError("No schedule with id \(remove).")
+            }
+            _ = try? Schedule.launchctl(["bootout", "gui/\(getuid())/co.sistercreatives.koda.\(remove)"])
+            try FileManager.default.removeItem(at: path)
+            Crawl.logLine("Removed \(remove).")
+            return
+        }
+
+        guard let url, let db else {
+            throw ValidationError("--url and --db are needed to create a schedule.")
+        }
+        let schedule = CrawlSchedule(seedURL: url, hour: hour, minute: minute,
+                                     weekday: weekday, databasePath: db,
+                                     exportAfterwards: !noExport)
+        guard schedule.problems.isEmpty else {
+            throw ValidationError(schedule.problems.joined(separator: "\n"))
+        }
+
+        let binary = CommandLine.arguments[0].hasPrefix("/")
+            ? CommandLine.arguments[0]
+            : FileManager.default.currentDirectoryPath + "/" + CommandLine.arguments[0]
+        let logs = home.appendingPathComponent("Library/Logs/ScreamingKoda")
+        let text = ScheduleWriter.plist(schedule, binary: binary, logDirectory: logs.path)
+
+        if dryRun {
+            print(text)
+            return
+        }
+
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        let path = ScheduleWriter.agentPath(schedule, home: home)
+        try text.write(to: path, atomically: true, encoding: .utf8)
+        // Loaded immediately so the schedule is live now rather than after the
+        // next login, which is what someone setting one up expects.
+        _ = try? Schedule.launchctl(["bootstrap", "gui/\(getuid())", path.path])
+
+        Crawl.logLine("Scheduled: \(schedule.summary)")
+        Crawl.logLine("  id      \(schedule.id)")
+        Crawl.logLine("  agent   \(path.path)")
+        Crawl.logLine("  log     \(logs.path)/\(schedule.id).log")
+        Crawl.logLine("Remove it with: koda schedule --remove \(schedule.id)")
+    }
+
+    @discardableResult
+    static func launchctl(_ arguments: [String]) throws -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = arguments
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
     }
 }
