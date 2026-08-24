@@ -68,7 +68,117 @@ public struct RedirectHop: Sendable, Identifiable, Equatable {
     public let isLoop: Bool
 }
 
+/// One match of a content search, with enough context to judge it without
+/// opening the page.
+public struct SearchHit: Sendable, Identifiable, Equatable {
+    public let id: Int
+    public let urlID: Int64
+    public let url: String
+    /// Text either side of the first match on this page.
+    public let snippet: String
+    /// How many times the term appears on the page, not just whether it does.
+    public let count: Int
+}
+
 extension Store {
+    /// Response headers for one URL, in a stable order.
+    ///
+    /// Stored as a JSON object, so the order the server sent them in is already
+    /// lost; sorting by name at least makes two pages comparable by eye.
+    public func headers(id: Int64) throws -> [DetailField] {
+        try dbQueue.read { db in
+            guard let json = try String.fetchOne(
+                db, sql: "SELECT headers_json FROM responses WHERE url_id = ?", arguments: [id]),
+                  let data = json.data(using: .utf8),
+                  let decoded = try? JSONDecoder().decode([String: String].self, from: data)
+            else { return [] }
+            return decoded.keys.sorted().map { DetailField(label: $0, value: decoded[$0]) }
+        }
+    }
+
+    /// Searches retained page bodies.
+    ///
+    /// This is the one feature that makes body retention pay for itself: the
+    /// bodies are already stored, so "which pages mention this" needs no
+    /// re-crawl. Each body is decompressed and decoded on the fly rather than
+    /// held anywhere, and the scan stops as soon as `limit` pages have matched —
+    /// so a common term costs far less than a rare one.
+    ///
+    /// Bodies retained before a crawl's `retainBodyURLLimit` are the only ones
+    /// searchable; pages crawled after it have no body and are silently absent,
+    /// which the caller surfaces rather than hiding.
+    public func search(_ needle: String, regex: Bool = false,
+                       limit: Int = 200) throws -> [SearchHit] {
+        let trimmed = needle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let expression: NSRegularExpression?
+        if regex {
+            // An invalid pattern finds nothing rather than throwing: this is
+            // driven by a text field the user is still typing into.
+            expression = try? NSRegularExpression(pattern: trimmed, options: [.caseInsensitive])
+            if expression == nil { return [] }
+        } else {
+            expression = nil
+        }
+
+        return try dbQueue.read { db in
+            var hits: [SearchHit] = []
+            let cursor = try Row.fetchCursor(db, sql: """
+                SELECT u.id AS id, u.url AS url, r.body_gz AS body, r.content_type AS ct
+                FROM urls u JOIN responses r ON r.url_id = u.id
+                WHERE r.body_gz IS NOT NULL
+                ORDER BY u.id ASC
+                """)
+            while let row = try cursor.next() {
+                guard hits.count < limit else { break }
+                guard let gz: Data = row["body"], let raw = Gzip.decompress(gz) else { continue }
+                let text = TextDecoding.decode(raw, contentType: row["ct"])
+                guard let match = Self.firstMatch(in: text, needle: trimmed, expression: expression)
+                else { continue }
+                hits.append(SearchHit(id: hits.count, urlID: row["id"], url: row["url"],
+                                      snippet: match.snippet, count: match.count))
+            }
+            return hits
+        }
+    }
+
+    /// Returns a snippet around the first match and the total number of matches,
+    /// or nil when the page does not match at all.
+    static func firstMatch(in text: String, needle: String,
+                           expression: NSRegularExpression?) -> (snippet: String, count: Int)? {
+        let range: Range<String.Index>
+        let count: Int
+        if let expression {
+            let full = NSRange(text.startIndex..<text.endIndex, in: text)
+            let matches = expression.matches(in: text, range: full)
+            guard let first = matches.first, let converted = Range(first.range, in: text)
+            else { return nil }
+            range = converted
+            count = matches.count
+        } else {
+            guard let found = text.range(of: needle, options: [.caseInsensitive]) else { return nil }
+            range = found
+            var total = 0
+            var cursor = text.startIndex
+            while let next = text.range(of: needle, options: [.caseInsensitive],
+                                        range: cursor..<text.endIndex) {
+                total += 1
+                cursor = next.upperBound
+            }
+            count = total
+        }
+
+        let pad = 60
+        let start = text.index(range.lowerBound, offsetBy: -pad,
+                               limitedBy: text.startIndex) ?? text.startIndex
+        let end = text.index(range.upperBound, offsetBy: pad,
+                             limitedBy: text.endIndex) ?? text.endIndex
+        let snippet = text[start..<end]
+            .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        return ((start > text.startIndex ? "…" : "") + snippet + (end < text.endIndex ? "…" : ""),
+                count)
+    }
+
     /// Walks `redirect_target_id` from a URL to wherever it ends up.
     ///
     /// Done in Swift rather than SQL because following a chain is inherently

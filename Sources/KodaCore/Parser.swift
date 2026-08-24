@@ -4,10 +4,58 @@ import SwiftSoup
 
 public protocol PageParser: Sendable {
     func parse(html: String) throws -> PageFacts
+    /// Parse, then apply the crawl's custom extraction rules. Default-implemented
+    /// so existing parsers and every existing test keep working unchanged.
+    func parse(html: String, extractions: [ExtractionRule]) throws -> PageFacts
+}
+
+extension PageParser {
+    public func parse(html: String, extractions: [ExtractionRule]) throws -> PageFacts {
+        try parse(html: html)
+    }
 }
 
 public struct SwiftSoupParser: PageParser {
     public init() {}
+
+    public func parse(html: String, extractions: [ExtractionRule]) throws -> PageFacts {
+        var facts = try parse(html: html)
+        guard !extractions.isEmpty else { return facts }
+        let doc = try SwiftSoup.parse(html)
+        for rule in extractions {
+            // A selector that does not compile yields nothing for that rule and
+            // leaves the rest of the page alone: one bad rule must not cost the
+            // whole crawl, which is the same rule the fetcher and parser follow.
+            guard let matched = try? doc.select(rule.selector).array() else { continue }
+            for (index, element) in matched.enumerated() {
+                let raw: String?
+                switch rule.value {
+                case .text: raw = try? element.text()
+                case .html: raw = try? element.html()
+                case .attribute:
+                    // The selector carries the attribute, as `a[href]` does, so
+                    // the last attribute named in it is the one wanted.
+                    let attribute = Self.attributeName(from: rule.selector)
+                    raw = attribute.flatMap { try? element.attr($0) }
+                }
+                guard let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !value.isEmpty else { continue }
+                facts.extractions.append(
+                    ExtractionFact(name: rule.name, value: value, position: index))
+            }
+        }
+        return facts
+    }
+
+    /// `div.price[data-value]` -> `data-value`.
+    static func attributeName(from selector: String) -> String? {
+        guard let open = selector.lastIndex(of: "["),
+              let close = selector[open...].firstIndex(of: "]") else { return nil }
+        let inner = selector[selector.index(after: open)..<close]
+        let name = inner.split(separator: "=").first.map(String.init) ?? String(inner)
+        let cleaned = name.trimmingCharacters(in: CharacterSet(charactersIn: " ^$*~|"))
+        return cleaned.isEmpty ? nil : cleaned
+    }
 
     public func parse(html: String) throws -> PageFacts {
         let doc = try SwiftSoup.parse(html)

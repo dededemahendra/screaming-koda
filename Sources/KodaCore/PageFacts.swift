@@ -31,6 +31,20 @@ public struct ImageFact: Sendable {
     }
 }
 
+/// One extracted value. A rule that matches several elements produces several
+/// of these, which is why `position` exists.
+public struct ExtractionFact: Sendable, Equatable {
+    public let name: String
+    public let value: String
+    public let position: Int
+
+    public init(name: String, value: String, position: Int) {
+        self.name = name
+        self.value = value
+        self.position = position
+    }
+}
+
 /// One structured-data declaration. A page can carry many.
 public struct StructuredDataFact: Sendable, Equatable {
     /// `json-ld`, `microdata` or `rdfa`.
@@ -88,6 +102,7 @@ public struct PageFacts: Sendable {
     /// Names of analytics or tag-manager scripts detected in the markup.
     public var analytics: [String] = []
     public var structuredData: [StructuredDataFact] = []
+    public var extractions: [ExtractionFact] = []
     public var links: [LinkFact] = []
     public var images: [ImageFact] = []
     public var hreflang: [HreflangFact] = []

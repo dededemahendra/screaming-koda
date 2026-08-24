@@ -85,7 +85,7 @@ private func rows(_ store: Store, _ report: Report, _ filterID: String) throws -
         "internal", "external", "responseCodes", "titles", "metaDescription", "headings",
         "images", "canonicals", "directives", "hreflang", "pageDepth",
         "content", "urls", "anchorText",
-        "social", "structuredData", "pagination", "security",
+        "social", "structuredData", "pagination", "security", "extraction",
     ])
 }
 

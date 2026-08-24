@@ -135,6 +135,13 @@ extension Store {
                 arguments: [result.urlID, srcID, image.alt, image.width, image.height])
         }
 
+        try db.execute(sql: "DELETE FROM extractions WHERE url_id = ?", arguments: [result.urlID])
+        for entry in facts.extractions {
+            try db.execute(
+                sql: "INSERT INTO extractions (url_id, name, value, position) VALUES (?,?,?,?)",
+                arguments: [result.urlID, entry.name, entry.value, entry.position])
+        }
+
         try db.execute(sql: "DELETE FROM structured_data WHERE url_id = ?", arguments: [result.urlID])
         for entry in facts.structuredData {
             try db.execute(sql: "INSERT INTO structured_data (url_id, format, type) VALUES (?,?,?)",

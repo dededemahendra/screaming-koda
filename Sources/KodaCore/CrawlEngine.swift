@@ -262,7 +262,7 @@ public actor CrawlEngine {
                 // yields a mangled title, which the Titles report would then
                 // present as a real finding. See TextDecoding.
                 let html = TextDecoding.decode(body, contentType: response.contentType)
-                facts = try? parser.parse(html: html)
+                facts = try? parser.parse(html: html, extractions: config.extractions)
                 if retainBodies { bodyGz = Gzip.compress(body) }
             }
 

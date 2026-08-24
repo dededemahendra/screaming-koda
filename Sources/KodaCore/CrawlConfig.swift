@@ -1,5 +1,34 @@
 import Foundation
 
+/// One named CSS-selector extraction.
+public struct ExtractionRule: Codable, Sendable, Equatable, Identifiable {
+    public var name: String
+    public var selector: String
+    /// What to take from each matched element.
+    public var value: ExtractionValue
+    public var id: String { name }
+
+    public init(name: String, selector: String, value: ExtractionValue = .text) {
+        self.name = name
+        self.selector = selector
+        self.value = value
+    }
+}
+
+public enum ExtractionValue: String, Codable, Sendable, CaseIterable {
+    case text, html
+    /// The value of a named attribute, given as `attr:href`.
+    case attribute
+
+    public var label: String {
+        switch self {
+        case .text: return "Text"
+        case .html: return "Inner HTML"
+        case .attribute: return "Attribute"
+        }
+    }
+}
+
 public struct CrawlConfig: Codable, Sendable {
     public var seedURL: String
     public var workers: Int = 5
@@ -33,6 +62,13 @@ public struct CrawlConfig: Codable, Sendable {
     /// Fetch image sources with HEAD to record status and byte size. Needed for
     /// the "images over 100KB" report.
     public var checkImages: Bool = true
+
+    /// User-defined CSS-selector extractions, applied to every HTML page.
+    ///
+    /// CSS rather than XPath because SwiftSoup already does CSS selectors, so
+    /// this is a configuration feature rather than a new parser. XPath would
+    /// mean a second engine for a strictly smaller audience.
+    public var extractions: [ExtractionRule] = []
 
     public init(seedURL: String) {
         self.seedURL = seedURL

@@ -198,6 +198,24 @@ public enum Reports {
                  LIMIT 1)
                 """,
             width: 110)
+        static let extractionCount = ReportColumn(
+            id: "extractionCount", header: "Values",
+            expression: "(SELECT count(*) FROM extractions e WHERE e.url_id = u.id)",
+            width: 60, alignment: .trailing)
+        static let extractedNames = ReportColumn(
+            id: "extractedNames", header: "Extracted",
+            expression: """
+                (SELECT group_concat(DISTINCT e.name) FROM extractions e WHERE e.url_id = u.id)
+                """,
+            width: 200)
+        static let extractedValues = ReportColumn(
+            id: "extractedValues", header: "Values Found",
+            expression: """
+                (SELECT group_concat(e.value, ' | ') FROM (
+                   SELECT value FROM extractions WHERE url_id = u.id
+                   ORDER BY name ASC, position ASC LIMIT 5) e)
+                """,
+            width: 380)
         static let topAnchor = ReportColumn(
             id: "topAnchor", header: "Most Common Anchor",
             expression: """
@@ -216,7 +234,7 @@ public enum Reports {
         internalURLs, external, responseCodes, titles, metaDescription, headings,
         images, canonicals, directives, hreflang, pageDepth,
         content, urlStructure, anchorText,
-        social, structuredData, pagination, security,
+        social, structuredData, pagination, security, extraction,
     ]
 
     public static let internalURLs = Report(
@@ -636,6 +654,28 @@ public enum Reports {
                          predicate: missingHeader("referrer-policy"), isIssue: true),
             ReportFilter(id: "insecure", name: "Served over HTTP",
                          predicate: "u.url NOT LIKE 'https://%'", isIssue: true),
+        ])
+
+    /// Whatever the crawl was configured to pull out of each page.
+    ///
+    /// Empty until extraction rules are set, and deliberately still a tab in
+    /// that state: an empty Extraction tab is how someone discovers the feature
+    /// exists, where a hidden one is not.
+    public static let extraction = Report(
+        id: "extraction", name: "Extraction",
+        predicate: htmlPage,
+        columns: [Col.address, Col.extractionCount, Col.extractedNames,
+                  Col.extractedValues, Col.title],
+        filters: [
+            allFilter,
+            ReportFilter(id: "extracted", name: "Something was extracted", predicate: """
+                EXISTS (SELECT 1 FROM extractions e WHERE e.url_id = u.id)
+                """),
+            // With rules configured, a page matching none of them is usually a
+            // template that changed, which is exactly what you want to find.
+            ReportFilter(id: "none", name: "Nothing matched", predicate: """
+                NOT EXISTS (SELECT 1 FROM extractions e WHERE e.url_id = u.id)
+                """, isIssue: true),
         ])
 
     public static let pageDepth = Report(

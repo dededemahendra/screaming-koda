@@ -182,6 +182,18 @@ public final class Store: @unchecked Sendable {
                 ALTER TABLE images ADD COLUMN height INTEGER;
                 """)
         }
+        m.registerMigration("v6-extractions") { db in
+            try db.execute(sql: """
+                CREATE TABLE extractions (
+                  url_id INTEGER NOT NULL REFERENCES urls(id),
+                  name TEXT NOT NULL,
+                  value TEXT NOT NULL,
+                  position INTEGER NOT NULL
+                );
+                CREATE INDEX idx_extractions_url ON extractions(url_id);
+                CREATE INDEX idx_extractions_name ON extractions(name);
+                """)
+        }
         return m
     }
 
