@@ -238,6 +238,17 @@ public enum Reports {
         static let staticWords = ReportColumn(id: "staticWords", header: "Static Words",
                                               expression: "r.static_words",
                                               width: 100, alignment: .trailing)
+        static let ttfb = ReportColumn(id: "ttfb", header: "TTFB ms",
+                                       expression: "r.perf_ttfb_ms", width: 75, alignment: .trailing)
+        static let fcp = ReportColumn(id: "fcp", header: "FCP ms",
+                                      expression: "r.perf_fcp_ms", width: 70, alignment: .trailing)
+        static let lcp = ReportColumn(id: "lcp", header: "LCP ms",
+                                      expression: "r.perf_lcp_ms", width: 70, alignment: .trailing)
+        static let loadMs = ReportColumn(id: "loadMs", header: "Load ms",
+                                         expression: "r.perf_load_ms", width: 75, alignment: .trailing)
+        static let subresources = ReportColumn(id: "subresources", header: "Requests",
+                                               expression: "r.perf_resources",
+                                               width: 75, alignment: .trailing)
         static let inSitemap = ReportColumn(
             id: "inSitemap", header: "In Sitemap",
             expression: "CASE WHEN u.in_sitemap = 1 THEN 'Yes' ELSE 'No' END", width: 90)
@@ -260,7 +271,7 @@ public enum Reports {
         images, canonicals, directives, hreflang, pageDepth,
         content, urlStructure, anchorText,
         social, structuredData, pagination, security, extraction, sitemap, resources,
-        javascript,
+        javascript, performance,
     ]
 
     public static let internalURLs = Report(
@@ -800,6 +811,36 @@ public enum Reports {
                          predicate: "r.render_ms > 3000", isIssue: true),
             ReportFilter(id: "notRendered", name: "Not rendered",
                          predicate: "r.rendered = 0"),
+        ])
+
+    /// What the browser observed while loading each page.
+    ///
+    /// Empty unless rendering is on, since these come from the browser's own
+    /// performance timeline. Deliberately not "Core Web Vitals": WebKit's
+    /// `supportedEntryTypes` has no `layout-shift`, so CLS cannot be measured
+    /// here at all, and INP needs a real interaction a crawler never makes.
+    /// Calling four of the six metrics Core Web Vitals would imply the other two
+    /// passed.
+    public static let performance = Report(
+        id: "performance", name: "Performance",
+        predicate: "u.is_internal = 1 AND r.rendered = 1 AND \(pageRows)",
+        columns: [Col.address, Col.ttfb, Col.fcp, Col.lcp, Col.loadMs,
+                  Col.subresources, Col.renderMs, Col.title],
+        filters: [
+            allFilter,
+            // Google's own "needs improvement" boundary for LCP is 2.5s. This is
+            // a rendered measurement on one machine with a warm cache, not a
+            // field metric, so treat it as a smell rather than a verdict.
+            ReportFilter(id: "slowLCP", name: "LCP over 2.5s",
+                         predicate: "r.perf_lcp_ms > 2500", isIssue: true),
+            ReportFilter(id: "slowTTFB", name: "TTFB over 800ms",
+                         predicate: "r.perf_ttfb_ms > 800", isIssue: true),
+            ReportFilter(id: "slowLoad", name: "Load over 3s",
+                         predicate: "r.perf_load_ms > 3000", isIssue: true),
+            ReportFilter(id: "manyRequests", name: "Over 50 subresources",
+                         predicate: "r.perf_resources > 50", isIssue: true),
+            ReportFilter(id: "noMetrics", name: "No timings reported",
+                         predicate: "r.perf_ttfb_ms IS NULL AND r.perf_fcp_ms IS NULL"),
         ])
 
     public static let pageDepth = Report(

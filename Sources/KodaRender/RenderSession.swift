@@ -28,8 +28,10 @@ final class RenderSession: NSObject, WKNavigationDelegate, WKScriptMessageHandle
     private var continuation: CheckedContinuation<Void, Never>?
 
     /// Installed before any page script runs, so an error thrown during initial
-    /// evaluation is still captured. Console output is forwarded rather than
-    /// replaced, so a page that reads its own console still behaves normally.
+    /// evaluation is still captured, and so the performance observers below are
+    /// registered before the metrics they watch for occur. Console output is
+    /// forwarded rather than replaced, so a page that reads its own console
+    /// still behaves normally.
     private static let errorCapture = """
         (function () {
           const post = (kind, parts) => {
@@ -45,6 +47,44 @@ final class RenderSession: NSObject, WKNavigationDelegate, WKScriptMessageHandle
           });
           window.addEventListener("unhandledrejection", function (e) {
             post("unhandled promise rejection", [e.reason]);
+          });
+
+          // Performance metrics. Registered here, at document start, because an
+          // observer added after load misses the events it is watching for even
+          // with buffered:true in some engines.
+          //
+          // Only what WebKit can actually report: its supportedEntryTypes has no
+          // "layout-shift", so CLS is not measurable here at all, and INP needs a
+          // real interaction that a crawler never makes. Reporting either as zero
+          // would be inventing a passing grade.
+          window.__kodaPerf = { ttfb: null, fcp: null, lcp: null, dcl: null, load: null, resources: 0 };
+          try {
+            new PerformanceObserver(function (l) {
+              var e = l.getEntries();
+              if (e.length) { window.__kodaPerf.lcp = e[e.length - 1].startTime; }
+            }).observe({ type: "largest-contentful-paint", buffered: true });
+          } catch (e) {}
+          try {
+            new PerformanceObserver(function (l) {
+              l.getEntries().forEach(function (x) {
+                if (x.name === "first-contentful-paint") { window.__kodaPerf.fcp = x.startTime; }
+              });
+            }).observe({ type: "paint", buffered: true });
+          } catch (e) {}
+          // Deferred by a tick: inside the load handler `loadEventEnd` has not
+          // been written yet, so reading it there always yields 0.
+          window.addEventListener("load", function () {
+            setTimeout(function () {
+            try {
+              var n = performance.getEntriesByType("navigation")[0];
+              if (n) {
+                window.__kodaPerf.ttfb = n.responseStart;
+                window.__kodaPerf.dcl = n.domContentLoadedEventEnd;
+                window.__kodaPerf.load = n.loadEventEnd;
+              }
+              window.__kodaPerf.resources = performance.getEntriesByType("resource").length;
+            } catch (e) {}
+            }, 0);
           });
         })();
         """
@@ -120,6 +160,15 @@ final class RenderSession: NSObject, WKNavigationDelegate, WKScriptMessageHandle
         // The caller's snippets run against the finished DOM. Each is wrapped so
         // a snippet that throws yields no value for that rule rather than
         // failing the render — one bad snippet must not cost the page.
+        // Read before the caller's own snippets, so a snippet that navigates or
+        // rewrites the page cannot destroy the measurements.
+        var metrics: PageMetrics?
+        if let raw = try? await webView.evaluateJavaScript("JSON.stringify(window.__kodaPerf || null)"),
+           let json = raw as? String, let data = json.data(using: .utf8),
+           let decoded = try? JSONDecoder().decode(PageMetrics.self, from: data) {
+            metrics = decoded
+        }
+
         var scriptResults: [String: String] = [:]
         for rule in scripts {
             let wrapped = "(function(){ try { return String(eval(\(Self.jsLiteral(rule.selector)))); }"
@@ -137,7 +186,8 @@ final class RenderSession: NSObject, WKNavigationDelegate, WKScriptMessageHandle
         return RenderedPage(html: html, errors: errors,
                             elapsedMs: Int(Date().timeIntervalSince(started) * 1000),
                             status: response?.statusCode,
-                            scriptResults: scriptResults)
+                            scriptResults: scriptResults,
+                            metrics: metrics)
     }
 
     /// A snippet is user text going into a JavaScript program, so it is passed

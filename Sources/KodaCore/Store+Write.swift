@@ -16,8 +16,10 @@ extension Store {
                         INSERT INTO responses
                           (url_id, status, error_kind, content_type, content_length,
                            response_time_ms, redirect_target_id, fetched_at, body_gz, headers_json,
-                           rendered, render_ms, js_errors, rendered_words, static_words)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                           rendered, render_ms, js_errors, rendered_words, static_words,
+                           perf_ttfb_ms, perf_fcp_ms, perf_lcp_ms, perf_dcl_ms, perf_load_ms,
+                           perf_resources)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(url_id) DO UPDATE SET
                           status=excluded.status, error_kind=excluded.error_kind,
                           content_type=excluded.content_type, content_length=excluded.content_length,
@@ -28,7 +30,11 @@ extension Store {
                           rendered=excluded.rendered, render_ms=excluded.render_ms,
                           js_errors=excluded.js_errors,
                           rendered_words=excluded.rendered_words,
-                          static_words=excluded.static_words
+                          static_words=excluded.static_words,
+                          perf_ttfb_ms=excluded.perf_ttfb_ms, perf_fcp_ms=excluded.perf_fcp_ms,
+                          perf_lcp_ms=excluded.perf_lcp_ms, perf_dcl_ms=excluded.perf_dcl_ms,
+                          perf_load_ms=excluded.perf_load_ms,
+                          perf_resources=excluded.perf_resources
                         """,
                     arguments: [
                         result.urlID, result.status, result.errorKind, result.contentType,
@@ -45,6 +51,12 @@ extension Store {
                         result.render.flatMap { $0.errors.isEmpty ? nil : $0.errors.joined(separator: "\n") },
                         result.render?.renderedWords,
                         result.render?.staticWords,
+                        result.render?.metrics?.ttfb.map { Int($0.rounded()) },
+                        result.render?.metrics?.fcp.map { Int($0.rounded()) },
+                        result.render?.metrics?.lcp.map { Int($0.rounded()) },
+                        result.render?.metrics?.dcl.map { Int($0.rounded()) },
+                        result.render?.metrics?.load.map { Int($0.rounded()) },
+                        result.render?.metrics?.resources,
                     ]
                 )
 

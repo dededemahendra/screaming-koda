@@ -1,5 +1,36 @@
 import Foundation
 
+/// Timings a renderer could actually observe.
+///
+/// Every field is optional because a page may not produce it, and every field
+/// that WebKit cannot report is simply absent rather than defaulted. In
+/// particular there is no CLS and no INP: WebKit's `supportedEntryTypes` has no
+/// `layout-shift`, and INP needs a real interaction that a crawler never makes.
+/// Reporting either as zero would be inventing a passing grade.
+public struct PageMetrics: Codable, Sendable, Equatable {
+    /// Time to first byte.
+    public let ttfb: Double?
+    /// First contentful paint.
+    public let fcp: Double?
+    /// Largest contentful paint, when the engine produced an entry.
+    public let lcp: Double?
+    /// DOMContentLoaded, then the load event.
+    public let dcl: Double?
+    public let load: Double?
+    /// How many subresources the page pulled in.
+    public let resources: Int?
+
+    public init(ttfb: Double?, fcp: Double?, lcp: Double?, dcl: Double?,
+                load: Double?, resources: Int?) {
+        self.ttfb = ttfb
+        self.fcp = fcp
+        self.lcp = lcp
+        self.dcl = dcl
+        self.load = load
+        self.resources = resources
+    }
+}
+
 /// What a renderer gives back for one page.
 public struct RenderedPage: Sendable, Equatable {
     /// The DOM after scripts have run, serialised back to HTML.
@@ -8,6 +39,8 @@ public struct RenderedPage: Sendable, Equatable {
     public let errors: [String]
     /// Results of the caller's JavaScript snippets, by name.
     public let scriptResults: [String: String]
+    /// Timings, when the page produced any.
+    public let metrics: PageMetrics?
     /// How long rendering took, which is the number that decides whether
     /// rendering a whole site is affordable.
     public let elapsedMs: Int
@@ -17,10 +50,12 @@ public struct RenderedPage: Sendable, Equatable {
     public let status: Int?
 
     public init(html: String, errors: [String], elapsedMs: Int, status: Int? = nil,
-                scriptResults: [String: String] = [:]) {
+                scriptResults: [String: String] = [:],
+                metrics: PageMetrics? = nil) {
         self.html = html
         self.errors = errors
         self.scriptResults = scriptResults
+        self.metrics = metrics
         self.elapsedMs = elapsedMs
         self.status = status
     }

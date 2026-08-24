@@ -299,7 +299,8 @@ public actor CrawlEngine {
                         render = RenderOutcome(elapsedMs: rendered.elapsedMs,
                                                errors: rendered.errors,
                                                renderedWords: renderedFacts.wordCount,
-                                               staticWords: facts?.wordCount ?? 0)
+                                               staticWords: facts?.wordCount ?? 0,
+                                               metrics: rendered.metrics)
                         var merged = renderedFacts
                         // JavaScript results join the CSS-selector extractions,
                         // so both kinds land in the same tab and the same export.

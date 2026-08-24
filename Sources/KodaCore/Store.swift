@@ -230,6 +230,20 @@ public final class Store: @unchecked Sendable {
                 ALTER TABLE responses ADD COLUMN static_words INTEGER;
                 """)
         }
+        m.registerMigration("v10-performance") { db in
+            // Only what WebKit can actually observe. There is deliberately no
+            // CLS or INP column: `supportedEntryTypes` has no "layout-shift",
+            // and INP needs a real interaction a crawler never makes. A column
+            // that could only ever hold zero would read as a passing grade.
+            try db.execute(sql: """
+                ALTER TABLE responses ADD COLUMN perf_ttfb_ms INTEGER;
+                ALTER TABLE responses ADD COLUMN perf_fcp_ms INTEGER;
+                ALTER TABLE responses ADD COLUMN perf_lcp_ms INTEGER;
+                ALTER TABLE responses ADD COLUMN perf_dcl_ms INTEGER;
+                ALTER TABLE responses ADD COLUMN perf_load_ms INTEGER;
+                ALTER TABLE responses ADD COLUMN perf_resources INTEGER;
+                """)
+        }
         return m
     }
 

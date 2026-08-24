@@ -7,7 +7,7 @@ import Testing
 
 /// A tiny HTTP server, so rendering is exercised against a real network load
 /// rather than `loadHTMLString` — which skips the whole navigation path.
-private final class TinyServer: @unchecked Sendable {
+final class TinyServer: @unchecked Sendable {
     let port: Int
     private let process: Process
     private let directory: URL

@@ -8,12 +8,16 @@ public struct RenderOutcome: Sendable, Equatable {
     /// is what says whether a site needs rendering at all.
     public let renderedWords: Int
     public let staticWords: Int
+    /// Timings the browser observed, when it produced any.
+    public let metrics: PageMetrics?
 
-    public init(elapsedMs: Int, errors: [String], renderedWords: Int, staticWords: Int) {
+    public init(elapsedMs: Int, errors: [String], renderedWords: Int, staticWords: Int,
+                metrics: PageMetrics? = nil) {
         self.elapsedMs = elapsedMs
         self.errors = errors
         self.renderedWords = renderedWords
         self.staticWords = staticWords
+        self.metrics = metrics
     }
 }
 
