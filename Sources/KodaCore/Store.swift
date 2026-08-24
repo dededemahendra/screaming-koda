@@ -255,6 +255,15 @@ public final class Store: @unchecked Sendable {
                 ALTER TABLE page_facts ADD COLUMN text_length INTEGER;
                 """)
         }
+        m.registerMigration("v12-serp-widths") { db in
+            // Stored rather than computed at query time: measuring text needs a
+            // font engine, which SQL has no access to, and a report filter has
+            // to be expressible as a predicate.
+            try db.execute(sql: """
+                ALTER TABLE page_facts ADD COLUMN title_pixels INTEGER;
+                ALTER TABLE page_facts ADD COLUMN meta_description_pixels INTEGER;
+                """)
+        }
         return m
     }
 

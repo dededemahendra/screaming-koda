@@ -74,6 +74,7 @@ public struct ConfigSheet: View {
                             value: $draft.maxPerHost, in: 1...max(draft.workers, 1))
                     Toggle("Respect robots.txt", isOn: $draft.respectRobots)
                     Toggle("Crawl subdomains", isOn: $draft.crawlSubdomains)
+                    Toggle("Crawl as a phone", isOn: $draft.mobile)
                     Toggle("Follow internal nofollow links", isOn: $draft.followInternalNofollow)
                     TextField("User agent", text: $draft.userAgent)
                 }

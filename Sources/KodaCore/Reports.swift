@@ -238,6 +238,12 @@ public enum Reports {
         static let staticWords = ReportColumn(id: "staticWords", header: "Static Words",
                                               expression: "r.static_words",
                                               width: 100, alignment: .trailing)
+        static let titlePixels = ReportColumn(id: "titlePixels", header: "Title px",
+                                              expression: "f.title_pixels",
+                                              width: 75, alignment: .trailing)
+        static let descPixels = ReportColumn(id: "descPixels", header: "Desc px",
+                                             expression: "f.meta_description_pixels",
+                                             width: 75, alignment: .trailing)
         static let query = ReportColumn(
             id: "query", header: "Query String",
             expression: """
@@ -293,7 +299,7 @@ public enum Reports {
         images, canonicals, directives, hreflang, pageDepth,
         content, urlStructure, anchorText,
         social, structuredData, pagination, security, extraction, sitemap, resources,
-        javascript, performance, crawlability,
+        javascript, performance, crawlability, serp,
     ]
 
     public static let internalURLs = Report(
@@ -362,7 +368,7 @@ public enum Reports {
     public static let titles = Report(
         id: "titles", name: "Titles",
         predicate: htmlPage,
-        columns: [Col.address, Col.title, Col.titleLength, Col.titleCount,
+        columns: [Col.address, Col.title, Col.titleLength, Col.titlePixels, Col.titleCount,
                   Col.h1, Col.indexability],
         filters: [
             allFilter,
@@ -377,12 +383,18 @@ public enum Reports {
             ReportFilter(id: "sameAsH1", name: "Same as H1", predicate: """
                 f.title IS NOT NULL AND f.h1 IS NOT NULL AND trim(f.title) = trim(f.h1)
                 """, isIssue: true),
+            // Pixels, not characters: twenty W's is four times the width of
+            // twenty i's, and it is width that gets truncated.
+            ReportFilter(id: "tooWide", name: "Wider than a result snippet",
+                         predicate: "f.title_pixels > \(Int(SERPMetrics.titleLimit))",
+                         isIssue: true),
         ])
 
     public static let metaDescription = Report(
         id: "metaDescription", name: "Meta Description",
         predicate: htmlPage,
-        columns: [Col.address, Col.desc, Col.descLength, Col.descCount, Col.indexability],
+        columns: [Col.address, Col.desc, Col.descLength, Col.descPixels, Col.descCount,
+                  Col.indexability],
         filters: [
             allFilter,
             ReportFilter(id: "missing", name: "Missing",
@@ -396,6 +408,9 @@ public enum Reports {
                 """, isIssue: true),
             ReportFilter(id: "multiple", name: "Multiple",
                          predicate: "f.meta_description_count > 1", isIssue: true),
+            ReportFilter(id: "tooWide", name: "Wider than a result snippet",
+                         predicate: "f.meta_description_pixels > \(Int(SERPMetrics.descriptionLimit))",
+                         isIssue: true),
         ])
 
     public static let headings = Report(
@@ -950,6 +965,35 @@ public enum Reports {
             // the site contradicting itself twice over.
             ReportFilter(id: "sitemapBlocked", name: "In the sitemap but not crawlable",
                          predicate: "u.in_sitemap = 1", isIssue: true),
+        ])
+
+    /// How each page would appear as a search result.
+    ///
+    /// Widths are measured with a font engine rather than estimated from
+    /// character counts, because width is what gets truncated and characters are
+    /// a poor proxy for it. The thresholds are observed conventions that Google
+    /// changes without notice — a guide, not a contract.
+    public static let serp = Report(
+        id: "serp", name: "SERP",
+        predicate: htmlPage,
+        columns: [Col.address, Col.title, Col.titlePixels, Col.desc, Col.descPixels,
+                  Col.indexability],
+        filters: [
+            allFilter,
+            ReportFilter(id: "titleTruncated", name: "Title would be truncated",
+                         predicate: "f.title_pixels > \(Int(SERPMetrics.titleLimit))",
+                         isIssue: true),
+            ReportFilter(id: "descTruncated", name: "Description would be truncated",
+                         predicate: "f.meta_description_pixels > \(Int(SERPMetrics.descriptionLimit))",
+                         isIssue: true),
+            // Under half the available width is a wasted snippet: there was room
+            // to say more and the page did not.
+            ReportFilter(id: "titleShort", name: "Title uses under half the width",
+                         predicate: "f.title_pixels IS NOT NULL AND f.title_pixels < \(Int(SERPMetrics.titleLimit / 2))",
+                         isIssue: true),
+            ReportFilter(id: "noSnippet", name: "Nothing to show in a snippet",
+                         predicate: "(\(missing("title"))) OR (\(missing("meta_description")))",
+                         isIssue: true),
         ])
 
     public static let pageDepth = Report(

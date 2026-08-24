@@ -102,7 +102,7 @@ public final class CrawlController {
     @ObservationIgnored private let settings: CrawlSettings?
     /// Injected by the app, which owns the WebKit dependency. A bare controller
     /// has none, so rendering is simply unavailable in tests that do not ask.
-    @ObservationIgnored private let makeRenderer: (@Sendable () -> PageRenderer)?
+    @ObservationIgnored private let makeRenderer: (@Sendable (CrawlConfig) -> PageRenderer)?
     @ObservationIgnored private var engine: CrawlEngine?
     /// Kept so the sidebar counts and the inspector can query after the crawl
     /// task has finished with it. Internal rather than private so tests can
@@ -147,7 +147,7 @@ public final class CrawlController {
         dbPath: String? = nil,
         crawlsDirectory: (@MainActor @Sendable () -> URL)? = nil,
         settings: CrawlSettings? = nil,
-        makeRenderer: (@Sendable () -> PageRenderer)? = nil
+        makeRenderer: (@Sendable (CrawlConfig) -> PageRenderer)? = nil
     ) {
         self.client = client
         self.parser = parser
@@ -244,7 +244,7 @@ public final class CrawlController {
         do {
             prepared = try await CrawlSession.prepare(
                 dbPath: dbPath, config: config, client: client, parser: parser,
-                renderer: config.renderJavaScript ? makeRenderer?() : nil
+                renderer: config.renderJavaScript ? makeRenderer?(config) : nil
             )
         } catch {
             notice = "Cannot start: \(error)"

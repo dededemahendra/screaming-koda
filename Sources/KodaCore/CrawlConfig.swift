@@ -122,6 +122,19 @@ public struct CrawlConfig: Codable, Sendable {
     /// Built here rather than at each call site so the engine, the robots fetch
     /// and the sitemap fetch cannot drift — a crawl that authenticates its pages
     /// but not its robots.txt reads as "disallow all" and produces nothing.
+    /// A current iPhone Safari string. Mobile-specific markup is usually chosen
+    /// on the presence of "Mobile", so the exact version matters less than that.
+    public static let mobileUserAgent =
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 "
+        + "(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+
+    /// What the crawl actually sends, which is the mobile string when crawling
+    /// as a phone unless the user has set their own.
+    public var effectiveUserAgent: String {
+        guard mobile else { return userAgent }
+        return userAgent == KodaCoreInfo.userAgent ? Self.mobileUserAgent : userAgent
+    }
+
     public var requestHeaders: [String: String] {
         var out = extraHeaders
         if !basicAuthUser.isEmpty {
@@ -131,6 +144,15 @@ public struct CrawlConfig: Codable, Sendable {
         }
         return out
     }
+
+    /// Response headers to pull into the Extraction tab, by name. Matched
+    /// case-insensitively, since header case is not significant.
+    public var headerExtractions: [String] = []
+
+    /// Crawl as a phone: a mobile user agent, and a phone-sized viewport when
+    /// rendering. Sites that serve different markup to mobile clients — still
+    /// common — are otherwise crawled as the desktop version only.
+    public var mobile: Bool = false
 
     /// Named JavaScript snippets evaluated in the rendered page.
     ///

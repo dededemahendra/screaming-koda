@@ -14,7 +14,10 @@ struct KodaApp: App {
             // Only the shipped app persists settings; a bare controller keeps
             // them in memory so tests never read or write real preferences.
             settings: CrawlSettings(),
-            makeRenderer: { WebKitRenderer() }
+            makeRenderer: { config in
+                WebKitRenderer(poolSize: config.renderConcurrency, mobile: config.mobile,
+                               userAgent: config.effectiveUserAgent)
+            }
         )
         _controller = State(initialValue: controller)
         // Wired up here, in `init`, rather than in an `.onAppear` inside `body`: this

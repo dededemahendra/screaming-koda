@@ -59,6 +59,12 @@ struct Crawl: AsyncParsableCommand {
     @Flag(name: .long, help: "Render pages in a browser engine before parsing. Much slower.")
     var render = false
 
+    @Flag(name: .long, help: "Crawl as a phone: mobile user agent and viewport.")
+    var mobile = false
+
+    @Option(name: .long, help: "Response header to record for every page. Repeatable.")
+    var extractHeader: [String] = []
+
     @Option(name: .long, help: "How many pages may render at once.")
     var renderConcurrency: Int = 2
 
@@ -76,6 +82,8 @@ struct Crawl: AsyncParsableCommand {
         config.listModeOnly = listMode
         config.checkResources = checkResources
         config.renderJavaScript = render
+        config.mobile = mobile
+        config.headerExtractions = extractHeader
         config.renderConcurrency = max(1, renderConcurrency)
         for entry in js {
             guard let split = entry.firstIndex(of: "=") else {
@@ -129,7 +137,9 @@ struct Crawl: AsyncParsableCommand {
             client: URLSessionHTTPClient(), parser: SwiftSoupParser(),
             // Constructed here, in the executable, and injected: KodaCore has no
             // WebKit dependency and cannot build one itself.
-            renderer: render ? WebKitRenderer(poolSize: config.renderConcurrency) : nil,
+            renderer: render ? WebKitRenderer(poolSize: config.renderConcurrency,
+                                              mobile: config.mobile,
+                                              userAgent: config.effectiveUserAgent) : nil,
             onProgress: { progress in
                 FileHandle.standardError.write(
                     Data("\rcrawled \(progress.crawled)  queued \(progress.queued)".utf8)

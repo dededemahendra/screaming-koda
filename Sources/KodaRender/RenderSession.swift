@@ -89,7 +89,13 @@ final class RenderSession: NSObject, WKNavigationDelegate, WKScriptMessageHandle
         })();
         """
 
-    private override init() {
+    /// A phone-sized viewport, matching what `CrawlConfig.mobile` asks for.
+    /// Responsive sites choose their layout from the viewport, so crawling as a
+    /// phone means resizing the view as well as changing the user agent.
+    static let mobileViewport = CGSize(width: 390, height: 844)
+    static let desktopViewport = CGSize(width: 1440, height: 900)
+
+    private init(viewport: CGSize = RenderSession.desktopViewport, userAgent: String? = nil) {
         let controller = WKUserContentController()
         controller.addUserScript(WKUserScript(source: Self.errorCapture,
                                               injectionTime: .atDocumentStart,
@@ -97,18 +103,21 @@ final class RenderSession: NSObject, WKNavigationDelegate, WKScriptMessageHandle
         let configuration = WKWebViewConfiguration()
         configuration.userContentController = controller
         configuration.suppressesIncrementalRendering = true
-        // A viewport large enough that responsive sites render their desktop
-        // layout; a zero-sized view makes some frameworks skip rendering.
-        webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+        // A real viewport: a zero-sized view makes some frameworks skip
+        // rendering entirely.
+        webView = WKWebView(frame: CGRect(origin: .zero, size: viewport),
                             configuration: configuration)
         super.init()
+        if let userAgent { webView.customUserAgent = userAgent }
         controller.add(self, name: "kodaErrors")
         webView.navigationDelegate = self
     }
 
     static func run(url: String, timeout: TimeInterval, settleMs: Int,
-                    scripts: [ExtractionRule] = []) async throws -> RenderedPage {
-        let session = RenderSession()
+                    scripts: [ExtractionRule] = [], mobile: Bool = false,
+                    userAgent: String? = nil) async throws -> RenderedPage {
+        let session = RenderSession(viewport: mobile ? mobileViewport : desktopViewport,
+                                    userAgent: userAgent)
         return try await session.load(url: url, timeout: timeout, settleMs: settleMs,
                                       scripts: scripts)
     }

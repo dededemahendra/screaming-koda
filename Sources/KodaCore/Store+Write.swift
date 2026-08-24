@@ -87,10 +87,11 @@ extension Store {
                    meta_description, meta_description_length, meta_description_count,
                    h1, h1_count, h2, h2_count, canonical_id, canonical_count,
                    meta_robots, x_robots_tag, lang, word_count, text_length, content_hash,
+                   title_pixels, meta_description_pixels,
                    og_title, og_description, og_image, og_type,
                    twitter_card, twitter_title, twitter_image,
                    amphtml, rel_prev, rel_next, analytics)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(url_id) DO UPDATE SET
                   title=excluded.title, title_length=excluded.title_length, title_count=excluded.title_count,
                   meta_description=excluded.meta_description,
@@ -103,6 +104,8 @@ extension Store {
                   x_robots_tag=excluded.x_robots_tag, lang=excluded.lang,
                   word_count=excluded.word_count, text_length=excluded.text_length,
                   content_hash=excluded.content_hash,
+                  title_pixels=excluded.title_pixels,
+                  meta_description_pixels=excluded.meta_description_pixels,
                   og_title=excluded.og_title, og_description=excluded.og_description,
                   og_image=excluded.og_image, og_type=excluded.og_type,
                   twitter_card=excluded.twitter_card, twitter_title=excluded.twitter_title,
@@ -116,6 +119,8 @@ extension Store {
                 facts.h1, facts.h1Count, facts.h2, facts.h2Count,
                 canonicalID, facts.canonicalCount, facts.metaRobots, result.xRobotsTag,
                 facts.lang, facts.wordCount, facts.textLength, facts.contentHash,
+                SERPMetrics.titleWidth(facts.title).map { Int($0.rounded()) },
+                SERPMetrics.descriptionWidth(facts.metaDescription).map { Int($0.rounded()) },
                 facts.ogTitle, facts.ogDescription, facts.ogImage, facts.ogType,
                 facts.twitterCard, facts.twitterTitle, facts.twitterImage,
                 facts.amphtml, facts.relPrev, facts.relNext,
@@ -174,6 +179,16 @@ extension Store {
         }
 
         try db.execute(sql: "DELETE FROM extractions WHERE url_id = ?", arguments: [result.urlID])
+        // Named response headers, pulled into the same table as the CSS and
+        // JavaScript extractions: they answer the same question — "show me this
+        // one value for every page" — so they belong in the same tab.
+        for name in config.headerExtractions {
+            let match = result.headers.first { $0.key.lowercased() == name.lowercased() }
+            guard let match else { continue }
+            try db.execute(
+                sql: "INSERT INTO extractions (url_id, name, value, position) VALUES (?,?,?,0)",
+                arguments: [result.urlID, name, match.value])
+        }
         for entry in facts.extractions {
             try db.execute(
                 sql: "INSERT INTO extractions (url_id, name, value, position) VALUES (?,?,?,?)",
