@@ -10,7 +10,10 @@ struct KodaApp: App {
     @State private var model = AppModel()
 
     var body: some Scene {
-        WindowGroup {
+        // Window, not WindowGroup: there is one AppModel and one crawl, so a
+        // second window would show the same state twice and opening a file while
+        // the app was running spawned a duplicate.
+        Window("Screaming Koda", id: "main") {
             ContentView(model: model)
                 .frame(minWidth: 1000, minHeight: 620)
                 .task { openPendingRequest() }
