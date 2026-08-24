@@ -64,7 +64,7 @@ import Testing
 @Test func exportAllLeadsWithAnOverviewThenEveryReport() throws {
     let store = try ReportFixture.make()
     let exports = try store.exportAll()
-    #expect(exports.count == 26, "an overview plus every report")
+    #expect(exports.count == 27, "an overview plus every report")
     #expect(exports.first?.name == "Overview",
             "the person this gets handed to opens the first sheet")
     #expect(Array(exports.dropFirst()).map(\.name) == Reports.all.map(\.name))

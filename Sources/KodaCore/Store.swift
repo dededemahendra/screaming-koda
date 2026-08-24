@@ -300,6 +300,22 @@ public final class Store: @unchecked Sendable {
                 CREATE INDEX idx_simhash_url ON simhash_bands(url_id);
                 """)
         }
+        m.registerMigration("v14-external-metrics") { db in
+            // One table for every provider: a URL, where the number came from,
+            // what it is, and its value. Adding a provider is then a new
+            // MetricsProvider rather than a migration.
+            try db.execute(sql: """
+                CREATE TABLE external_metrics (
+                  url_id INTEGER NOT NULL REFERENCES urls(id),
+                  source TEXT NOT NULL,
+                  metric TEXT NOT NULL,
+                  value REAL,
+                  text TEXT,
+                  PRIMARY KEY (url_id, source, metric)
+                ) WITHOUT ROWID;
+                CREATE INDEX idx_metrics_source ON external_metrics(source, metric);
+                """)
+        }
         return m
     }
 

@@ -9,7 +9,7 @@ struct Koda: AsyncParsableCommand {
         commandName: "koda",
         abstract: "Crawl a site and report on it.",
         version: KodaCoreInfo.versionString,
-        subcommands: [Crawl.self, Export.self, Compare.self],
+        subcommands: [Crawl.self, Export.self, Compare.self, Enrich.self],
         defaultSubcommand: Crawl.self
     )
 }
@@ -424,5 +424,95 @@ struct Compare: AsyncParsableCommand {
             for url in list.prefix(10) { Crawl.logLine("  \(url)") }
             if total > 10 { Crawl.logLine("  …") }
         }
+    }
+}
+
+
+struct Enrich: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Add data the crawl cannot know: search, analytics, backlinks, field performance.",
+        discussion: """
+            Credentials come from the environment, so a key never ends up in shell \
+            history or a crontab:
+
+              KODA_PAGESPEED_KEY, KODA_GOOGLE_CLIENT_ID, KODA_GOOGLE_CLIENT_SECRET,
+              KODA_GOOGLE_REFRESH_TOKEN, KODA_GSC_SITE, KODA_GA4_PROPERTY,
+              KODA_AHREFS_TOKEN, KODA_MAJESTIC_KEY, KODA_MOZ_ACCESS_ID, KODA_MOZ_SECRET
+
+            PageSpeed works without a key at a lower quota, so it is the one source \
+            that needs no setup at all.
+            """)
+
+    @Argument(help: "Path to a .koda database.")
+    var db: String
+
+    @Option(name: .long, help: "Which source: pagespeed, gsc, ga4, ahrefs, majestic, moz.")
+    var source: String = "pagespeed"
+
+    @Option(name: .long, help: "How many URLs to enrich.")
+    var limit: Int = 100
+
+    @Flag(name: .long, help: "List the sources that are configured and stop.")
+    var check = false
+
+    mutating func run() async throws {
+        let credentials = Enrich.credentialsFromEnvironment()
+
+        if check {
+            Crawl.logLine("Configured sources:")
+            for source in MetricSource.allCases {
+                let ready = credentials.availableSources.contains(source)
+                Crawl.logLine("  \(ready ? "yes" : " no") \(source.label)"
+                    + (ready ? "" : " — needs \(source.credentialHint)"))
+            }
+            return
+        }
+
+        guard let chosen = MetricSource(rawValue: source) else {
+            throw ValidationError("Unknown source \(source). Choose from: "
+                + MetricSource.allCases.map(\.rawValue).joined(separator: ", "))
+        }
+        guard credentials.availableSources.contains(chosen) else {
+            throw ValidationError("\(chosen.label) needs \(chosen.credentialHint). "
+                + "Run with --check to see what is configured.")
+        }
+        guard FileManager.default.fileExists(atPath: db) else {
+            throw ValidationError("No crawl database at \(db)")
+        }
+
+        let store = try Store(path: db)
+        try store.migrate()
+        Crawl.logLine("Enriching from \(chosen.label)…")
+        let result = try await Enrichment.run(
+            source: chosen, store: store, credentials: credentials,
+            client: URLSessionHTTPClient(), limit: limit,
+            onProgress: { done, total in
+                FileHandle.standardError.write(Data("\rurl \(done)/\(total)".utf8))
+            })
+        FileHandle.standardError.write(Data("\n".utf8))
+        Crawl.logLine("Stored \(result.stored) metrics.")
+        for failure in result.failures.prefix(5) { Crawl.logLine("  failed: \(failure)") }
+        if result.failures.count > 5 {
+            Crawl.logLine("  …and \(result.failures.count - 5) more.")
+        }
+    }
+
+    /// Read from the environment rather than taken as flags: a key on the
+    /// command line ends up in shell history and in the process list, where
+    /// anyone on the machine can read it.
+    static func credentialsFromEnvironment() -> ProviderCredentials {
+        let env = ProcessInfo.processInfo.environment
+        var out = ProviderCredentials()
+        out.pageSpeedKey = env["KODA_PAGESPEED_KEY"] ?? ""
+        out.googleClientID = env["KODA_GOOGLE_CLIENT_ID"] ?? ""
+        out.googleClientSecret = env["KODA_GOOGLE_CLIENT_SECRET"] ?? ""
+        out.googleRefreshToken = env["KODA_GOOGLE_REFRESH_TOKEN"] ?? ""
+        out.searchConsoleSite = env["KODA_GSC_SITE"] ?? ""
+        out.analyticsProperty = env["KODA_GA4_PROPERTY"] ?? ""
+        out.ahrefsToken = env["KODA_AHREFS_TOKEN"] ?? ""
+        out.majesticKey = env["KODA_MAJESTIC_KEY"] ?? ""
+        out.mozAccessID = env["KODA_MOZ_ACCESS_ID"] ?? ""
+        out.mozSecretKey = env["KODA_MOZ_SECRET"] ?? ""
+        return out
     }
 }

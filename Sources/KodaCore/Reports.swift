@@ -238,6 +238,36 @@ public enum Reports {
         static let staticWords = ReportColumn(id: "staticWords", header: "Static Words",
                                               expression: "r.static_words",
                                               width: 100, alignment: .trailing)
+        /// One external metric as a column. Built rather than declared because
+        /// there are dozens across six providers and they all have one shape.
+        static func metric(_ source: MetricSource, _ name: String,
+                           header: String, width: Double = 100) -> ReportColumn {
+            ReportColumn(
+                id: "\(source.rawValue)_\(name.replacingOccurrences(of: " ", with: "_"))",
+                header: header,
+                expression: """
+                    (SELECT coalesce(m.text, CAST(round(m.value, 2) AS TEXT))
+                     FROM external_metrics m
+                     WHERE m.url_id = u.id AND m.source = '\(source.rawValue)'
+                       AND m.metric = '\(name)')
+                    """,
+                width: width, alignment: .trailing)
+        }
+
+        static func hasMetrics(_ source: MetricSource) -> String {
+            """
+            EXISTS (SELECT 1 FROM external_metrics m
+                    WHERE m.url_id = u.id AND m.source = '\(source.rawValue)')
+            """
+        }
+
+        static func metricValue(_ source: MetricSource, _ name: String) -> String {
+            """
+            (SELECT m.value FROM external_metrics m
+             WHERE m.url_id = u.id AND m.source = '\(source.rawValue)' AND m.metric = '\(name)')
+            """
+        }
+
         static let nearDuplicates = ReportColumn(
             id: "nearDuplicates", header: "Near Dupes",
             expression: """
@@ -310,7 +340,7 @@ public enum Reports {
         images, canonicals, directives, hreflang, pageDepth,
         content, urlStructure, anchorText,
         social, structuredData, pagination, security, extraction, sitemap, resources,
-        javascript, performance, crawlability, serp,
+        javascript, performance, crawlability, serp, externalData,
     ]
 
     public static let internalURLs = Report(
@@ -1027,6 +1057,74 @@ public enum Reports {
                          isIssue: true),
             ReportFilter(id: "noSnippet", name: "Nothing to show in a snippet",
                          predicate: "(\(missing("title"))) OR (\(missing("meta_description")))",
+                         isIssue: true),
+        ])
+
+    /// Everything the crawl could not know on its own.
+    ///
+    /// Empty until a provider has been run. The filters that matter are the
+    /// comparisons — a page with impressions and no crawl problems is working; a
+    /// page with traffic that the crawl found non-indexable is losing it.
+    public static let externalData = Report(
+        // Not "external": the External links tab already owns that id, and two
+        // reports sharing one collide in the counts dictionary, which is keyed
+        // "reportID.filterID". Caught by everyReportIDAndFilterIDIsUnique.
+        id: "externalData", name: "External Data",
+        predicate: htmlPage,
+        columns: [Col.address,
+                  Col.metric(.searchConsole, "Clicks", header: "Clicks", width: 70),
+                  Col.metric(.searchConsole, "Impressions", header: "Impressions", width: 95),
+                  Col.metric(.searchConsole, "Position", header: "Position", width: 80),
+                  Col.metric(.analytics, "Sessions", header: "Sessions", width: 80),
+                  Col.metric(.pageSpeed, "CWV Assessment", header: "CWV", width: 110),
+                  Col.metric(.pageSpeed, "Lighthouse Performance", header: "Perf", width: 65),
+                  Col.metric(.ahrefs, "Referring domains", header: "Ref Domains", width: 100),
+                  Col.metric(.moz, "Domain authority", header: "DA", width: 55),
+                  Col.indexability],
+        filters: [
+            allFilter,
+            ReportFilter(id: "enriched", name: "Has external data", predicate: """
+                EXISTS (SELECT 1 FROM external_metrics m WHERE m.url_id = u.id)
+                """),
+            ReportFilter(id: "notEnriched", name: "No external data yet", predicate: """
+                NOT EXISTS (SELECT 1 FROM external_metrics m WHERE m.url_id = u.id)
+                """),
+
+            // The comparisons. These are the point: a crawl finding on its own
+            // is a guess about what matters, and traffic tells you which guesses
+            // were right.
+            ReportFilter(id: "trafficButNonIndexable",
+                         name: "Getting clicks but non-indexable", predicate: """
+                \(Col.metricValue(.searchConsole, "Clicks")) > 0
+                AND (\(Indexability.isNonIndexable))
+                """, isIssue: true),
+            ReportFilter(id: "impressionsNoClicks",
+                         name: "Impressions but no clicks", predicate: """
+                \(Col.metricValue(.searchConsole, "Impressions")) > 100
+                AND coalesce(\(Col.metricValue(.searchConsole, "Clicks")), 0) = 0
+                """, isIssue: true),
+            ReportFilter(id: "strikingDistance",
+                         name: "Ranking just off page one", predicate: """
+                \(Col.metricValue(.searchConsole, "Position")) BETWEEN 11 AND 20
+                """),
+            ReportFilter(id: "noTraffic",
+                         name: "Indexable but no clicks at all", predicate: """
+                \(Col.hasMetrics(.searchConsole))
+                AND coalesce(\(Col.metricValue(.searchConsole, "Clicks")), 0) = 0
+                AND NOT (\(Indexability.isNonIndexable))
+                """, isIssue: true),
+            ReportFilter(id: "sessionsButThin",
+                         name: "Has sessions but under 200 words", predicate: """
+                \(Col.metricValue(.analytics, "Sessions")) > 0
+                AND coalesce(f.word_count, 0) < 200
+                """, isIssue: true),
+            ReportFilter(id: "cwvFailing", name: "Fails Core Web Vitals", predicate: """
+                (SELECT m.text FROM external_metrics m
+                 WHERE m.url_id = u.id AND m.source = 'pagespeed'
+                   AND m.metric = 'CWV Assessment') = 'SLOW'
+                """, isIssue: true),
+            ReportFilter(id: "slowLighthouse", name: "Lighthouse performance under 50",
+                         predicate: "\(Col.metricValue(.pageSpeed, "Lighthouse Performance")) < 50",
                          isIssue: true),
         ])
 
