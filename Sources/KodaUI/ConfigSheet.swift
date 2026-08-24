@@ -10,6 +10,7 @@ public struct ConfigSheet: View {
     @State private var draft: CrawlConfig
     @State private var includeText: String
     @State private var excludeText: String
+    @State private var sitemapText: String
     private let onApply: (CrawlConfig) -> Void
     private let onCancel: () -> Void
 
@@ -19,6 +20,7 @@ public struct ConfigSheet: View {
         _draft = State(initialValue: config)
         _includeText = State(initialValue: config.include.joined(separator: "\n"))
         _excludeText = State(initialValue: config.exclude.joined(separator: "\n"))
+        _sitemapText = State(initialValue: config.sitemapURLs.joined(separator: "\n"))
         self.onApply = onApply
         self.onCancel = onCancel
     }
@@ -27,6 +29,7 @@ public struct ConfigSheet: View {
         var out = draft
         out.include = patterns(includeText)
         out.exclude = patterns(excludeText)
+        out.sitemapURLs = patterns(sitemapText)
         return CrawlSettings.clamped(out)
     }
 
@@ -69,6 +72,14 @@ public struct ConfigSheet: View {
                         Stepper("Max depth: \(draft.maxDepth ?? 3)", value: Binding(
                             get: { draft.maxDepth ?? 3 },
                             set: { draft.maxDepth = $0 }), in: 0...50)
+                    }
+                }
+                Section("Sitemaps") {
+                    Toggle("Read Sitemap: directives from robots.txt", isOn: $draft.discoverSitemaps)
+                    Toggle("List mode: crawl only the seed and sitemap URLs",
+                           isOn: $draft.listModeOnly)
+                    LabeledContent("Sitemap URLs") {
+                        TextEditor(text: $sitemapText).font(.body.monospaced()).frame(height: 44)
                     }
                 }
                 Section("What to fetch") {

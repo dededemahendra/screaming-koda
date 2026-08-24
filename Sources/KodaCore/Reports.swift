@@ -216,6 +216,9 @@ public enum Reports {
                    ORDER BY name ASC, position ASC LIMIT 5) e)
                 """,
             width: 380)
+        static let inSitemap = ReportColumn(
+            id: "inSitemap", header: "In Sitemap",
+            expression: "CASE WHEN u.in_sitemap = 1 THEN 'Yes' ELSE 'No' END", width: 90)
         static let topAnchor = ReportColumn(
             id: "topAnchor", header: "Most Common Anchor",
             expression: """
@@ -234,7 +237,7 @@ public enum Reports {
         internalURLs, external, responseCodes, titles, metaDescription, headings,
         images, canonicals, directives, hreflang, pageDepth,
         content, urlStructure, anchorText,
-        social, structuredData, pagination, security, extraction,
+        social, structuredData, pagination, security, extraction, sitemap,
     ]
 
     public static let internalURLs = Report(
@@ -676,6 +679,44 @@ public enum Reports {
             ReportFilter(id: "none", name: "Nothing matched", predicate: """
                 NOT EXISTS (SELECT 1 FROM extractions e WHERE e.url_id = u.id)
                 """, isIssue: true),
+        ])
+
+    /// What the sitemap claims against what the crawl found.
+    ///
+    /// This is the tab that makes orphan detection possible at all. A crawl on
+    /// its own cannot find an orphan — every URL it discovers has an inlink by
+    /// definition. A sitemap is an external list of URLs the site says exist, so
+    /// "declared in the sitemap and linked from nowhere" is a real orphan rather
+    /// than the "one inlink only" approximation Page Depth has to settle for.
+    public static let sitemap = Report(
+        id: "sitemap", name: "Sitemap",
+        predicate: "u.is_internal = 1 AND (u.in_sitemap = 1 OR r.status IS NOT NULL) AND \(pageRows)",
+        columns: [Col.address, Col.inSitemap, Col.status, Col.indexability,
+                  Col.inlinks, Col.depth, Col.title],
+        filters: [
+            allFilter,
+            ReportFilter(id: "inSitemap", name: "In the sitemap", predicate: "u.in_sitemap = 1"),
+            // The page the crawl started from is never an orphan, however few
+            // pages link to it — it is the entry point by definition. Without
+            // this a homepage that nothing links back to is reported as
+            // unreachable, which is the opposite of true.
+            ReportFilter(id: "orphans", name: "Orphans: in the sitemap, linked from nowhere",
+                         predicate: """
+                u.in_sitemap = 1
+                AND NOT EXISTS (SELECT 1 FROM links l WHERE l.to_url_id = u.id)
+                AND u.url != coalesce((SELECT seed_url FROM crawl_meta WHERE id = 1), '')
+                """, isIssue: true),
+            ReportFilter(id: "notInSitemap", name: "Crawled but not in the sitemap", predicate: """
+                u.in_sitemap = 0 AND r.status = 200
+                AND coalesce(r.content_type, '') LIKE 'text/html%'
+                """, isIssue: true),
+            // A sitemap is a list of URLs the site wants indexed, so a
+            // non-indexable one in it is the site contradicting itself.
+            ReportFilter(id: "nonIndexable", name: "In the sitemap but non-indexable",
+                         predicate: "u.in_sitemap = 1 AND (\(Indexability.isNonIndexable))",
+                         isIssue: true),
+            ReportFilter(id: "uncrawled", name: "In the sitemap but never reached",
+                         predicate: "u.in_sitemap = 1 AND r.status IS NULL", isIssue: true),
         ])
 
     public static let pageDepth = Report(

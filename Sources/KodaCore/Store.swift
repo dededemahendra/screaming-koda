@@ -194,11 +194,25 @@ public final class Store: @unchecked Sendable {
                 CREATE INDEX idx_extractions_name ON extractions(name);
                 """)
         }
+        m.registerMigration("v7-sitemaps") { db in
+            // Which URLs a sitemap declared, independent of whether the crawl
+            // reached them. This is what makes "in the sitemap but not linked"
+            // — the only honest orphan signal a crawler has — expressible.
+            try db.execute(sql: """
+                ALTER TABLE urls ADD COLUMN in_sitemap INTEGER NOT NULL DEFAULT 0;
+                CREATE INDEX idx_urls_sitemap ON urls(in_sitemap);
+                """)
+        }
         return m
     }
 
     public func initializeCrawl(config: CrawlConfig, startedAt: Date) throws {
         let json = String(data: try JSONEncoder().encode(config), encoding: .utf8) ?? "{}"
+        // Stored normalised so it can be compared against `urls.url`, which is
+        // always normalised. The Sitemap report needs exactly that comparison to
+        // tell an orphan from the page the crawl started on.
+        let seed = URLNormalizer.normalize(config.seedURL, relativeTo: nil)?.absoluteString
+            ?? config.seedURL
         try dbQueue.write { db in
             try db.execute(
                 sql: """
@@ -206,7 +220,7 @@ public final class Store: @unchecked Sendable {
                     VALUES (1, ?, ?, ?, 1)
                     ON CONFLICT(id) DO UPDATE SET seed_url=excluded.seed_url, config_json=excluded.config_json
                     """,
-                arguments: [config.seedURL, startedAt.timeIntervalSince1970, json]
+                arguments: [seed, startedAt.timeIntervalSince1970, json]
             )
         }
     }

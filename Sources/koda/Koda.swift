@@ -34,12 +34,24 @@ struct Crawl: AsyncParsableCommand {
     @Flag(name: .long, help: "Ignore robots.txt. Use only on sites you control.")
     var ignoreRobots = false
 
+    @Option(name: .long, help: "Sitemap URL to seed from. Repeatable.")
+    var sitemap: [String] = []
+
+    @Flag(name: .long, help: "Do not read Sitemap: directives from robots.txt.")
+    var noSitemapDiscovery = false
+
+    @Flag(name: .long, help: "Crawl only the seed and sitemap URLs, following no links.")
+    var listMode = false
+
     mutating func run() async throws {
         var config = CrawlConfig(seedURL: url)
         config.workers = workers
         config.urlCap = limit
         config.maxDepth = maxDepth
         config.respectRobots = !ignoreRobots
+        config.sitemapURLs = sitemap
+        config.discoverSitemaps = !noSitemapDiscovery
+        config.listModeOnly = listMode
 
         guard let host = config.seedHost else {
             throw ValidationError("Not a crawlable http(s) URL: \(url)")

@@ -70,6 +70,21 @@ public struct CrawlConfig: Codable, Sendable {
     /// mean a second engine for a strictly smaller audience.
     public var extractions: [ExtractionRule] = []
 
+    /// Sitemaps to seed the crawl from, beyond any that robots.txt announces.
+    public var sitemapURLs: [String] = []
+    /// Follow `Sitemap:` directives in robots.txt. On by default: it is where
+    /// sitemaps are meant to be announced, and finding them costs one request
+    /// the crawler already made.
+    public var discoverSitemaps: Bool = true
+    /// Crawl only what the sitemaps and seed list contain, following no links.
+    /// This is "list mode": an audit of a known set rather than a discovery run.
+    public var listModeOnly: Bool = false
+    /// Extra URLs to crawl, alongside the seed.
+    public var seedList: [String] = []
+    /// How many sitemap documents to fetch in one crawl, counting children of an
+    /// index. A bound, because a sitemap index can point at another index.
+    public var maxSitemaps: Int = 50
+
     public init(seedURL: String) {
         self.seedURL = seedURL
     }

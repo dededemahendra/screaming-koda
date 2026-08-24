@@ -472,3 +472,61 @@ private func redirectServerScript() throws -> URL {
     #expect(row?["meta_description"] == "A PDF served by the fixture site")
     #expect((row?["word_count"] as Int? ?? 0) > 0)
 }
+
+/// Sitemaps end to end, over real HTTP. The fixture sitemap is templated with
+/// the server's port at run time, because the port is only known then.
+@Test func aSitemapSeedsTheCrawlAndRevealsAnOrphan() async throws {
+    let source = try fixtureDirectory()
+    let staged = FileManager.default.temporaryDirectory
+        .appendingPathComponent("sitemap-site-\(UUID().uuidString)")
+    try FileManager.default.copyItem(at: source, to: staged)
+    defer { try? FileManager.default.removeItem(at: staged) }
+
+    let server = try FixtureServer(directory: staged)
+    defer { server.stop() }
+    try await server.waitUntilReady()
+
+    let sitemapPath = staged.appendingPathComponent("sitemap.xml")
+    let templated = try String(contentsOf: sitemapPath, encoding: .utf8)
+        .replacingOccurrences(of: "PORT", with: String(server.port))
+    try templated.write(to: sitemapPath, atomically: true, encoding: .utf8)
+
+    var config = CrawlConfig(seedURL: "http://127.0.0.1:\(server.port)/index.html")
+    config.workers = 3
+    config.sitemapURLs = ["http://127.0.0.1:\(server.port)/sitemap.xml"]
+
+    let (engine, store, _, sitemap) = try await CrawlSession.prepare(
+        dbPath: nil, config: config,
+        client: URLSessionHTTPClient(), parser: SwiftSoupParser())
+    try await engine.run(onProgress: nil)
+
+    #expect(sitemap.fetched == 1)
+    #expect(sitemap.urls == 3)
+    #expect(sitemap.failed.isEmpty)
+
+    // orphan.html is in the sitemap, linked from nowhere, and was still crawled.
+    let orphan = try await store.dbQueue.read { db in
+        try Row.fetchOne(db, sql: """
+            SELECT u.in_sitemap, r.status, f.title,
+                   (SELECT count(*) FROM links l WHERE l.to_url_id = u.id) AS inlinks
+            FROM urls u
+            LEFT JOIN responses r ON r.url_id = u.id
+            LEFT JOIN page_facts f ON f.url_id = u.id
+            WHERE u.path = '/orphan.html'
+            """)
+    }
+    #expect(orphan?["in_sitemap"] == 1)
+    #expect(orphan?["status"] == 200, "a sitemap URL is crawled, not merely recorded")
+    #expect(orphan?["title"] == "An orphaned page")
+    #expect(orphan?["inlinks"] == 0)
+
+    let ids = try store.ids(for: Reports.sitemap,
+                            filter: Reports.sitemap.filters.first { $0.id == "orphans" }!,
+                            sortBy: nil, ascending: true)
+    let paths = try await store.dbQueue.read { db in
+        Set(try String.fetchAll(db, sql: """
+            SELECT path FROM urls WHERE id IN (\(ids.map(String.init).joined(separator: ",")))
+            """))
+    }
+    #expect(paths == ["/orphan.html"], "index.html is the entry point, about.html is linked")
+}

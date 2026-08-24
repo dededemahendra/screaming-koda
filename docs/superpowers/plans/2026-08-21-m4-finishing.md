@@ -10,6 +10,15 @@ async contexts; a `public struct`'s memberwise init is internal so anything
 `KodaUITests` builds needs an explicit `public init`; `KodaCore` imports no UI
 framework.
 
+**Adding a stored property to a public `KodaCore` struct needs a clean build.**
+Layout changes are not always propagated by SwiftPM's incremental build, and the
+symptom is not a compile error — it is `swift test` crashing with SIGSEGV or
+SIGBUS somewhere unrelated. Diagnosed 2026-08-24 from the `.ips` crash report,
+which named `initializeWithCopy for ExtractionRule` inside `JSONEncoder`: adding
+fields to `CrawlConfig` left object files compiled against the old layout, and
+`rm -rf .build` fixed it outright. Reach for the crash report before bisecting;
+two hypotheses were rejected before it was consulted.
+
 New for this milestone: **verify binary output with a real reader.** A ZIP or
 XLSX checked only by the code that wrote it proves nothing. Every test on
 produced bytes goes through the system `unzip` or Python's `zipfile`.

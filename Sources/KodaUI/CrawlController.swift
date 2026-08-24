@@ -234,7 +234,8 @@ public final class CrawlController {
         var config = CrawlSettings.clamped(self.config)
         config.seedURL = seedURL
 
-        let prepared: (engine: CrawlEngine, store: Store, robotsOutcome: RobotsFetchOutcome)
+        let prepared: (engine: CrawlEngine, store: Store, robotsOutcome: RobotsFetchOutcome,
+                       sitemap: SitemapOutcome)
         do {
             prepared = try await CrawlSession.prepare(
                 dbPath: dbPath, config: config, client: client, parser: parser
@@ -243,6 +244,14 @@ public final class CrawlController {
             notice = "Cannot start: \(error)"
             state = .idle
             return
+        }
+
+        // A crawl seeded from a sitemap that turned out to be unreachable looks
+        // identical to one that simply found nothing, so say which it was.
+        if !prepared.sitemap.failed.isEmpty {
+            notice = appendNotice(notice, "\(prepared.sitemap.failed.count) sitemap(s) could not be "
+                + "read: " + prepared.sitemap.failed.prefix(3).joined(separator: ", ")
+                + (prepared.sitemap.failed.count > 3 ? ", and others." : "."))
         }
 
         if case .unreachable(let reason) = prepared.robotsOutcome {

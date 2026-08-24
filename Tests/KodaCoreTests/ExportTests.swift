@@ -64,7 +64,7 @@ import Testing
 @Test func exportAllCoversEveryReport() throws {
     let store = try ReportFixture.make()
     let exports = try store.exportAll()
-    #expect(exports.count == 19)
+    #expect(exports.count == 20)
     #expect(exports.map(\.name) == Reports.all.map(\.name))
 }
 

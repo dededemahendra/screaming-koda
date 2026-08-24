@@ -105,7 +105,11 @@ extension Store {
             guard let target = URLNormalizer.normalize(link.href, relativeTo: result.url) else { continue }
             let isInternal = Self.isInternal(target, seedHost: seedHost, config: config)
             let isNofollow = link.rel?.lowercased().contains("nofollow") == true
-            let followInternal = isInternal && (!isNofollow || config.followInternalNofollow)
+            // List mode audits a known set, so a link is recorded but never
+            // followed. Status-checking external links still applies: that is
+            // about the links on the listed pages, not about discovering more.
+            let followInternal = !config.listModeOnly
+                && isInternal && (!isNofollow || config.followInternalNofollow)
             // External links are not crawled, but we do want their status — a
             // broken outbound link is a real finding.
             let statusCheckExternal = !isInternal && config.checkExternalLinks
