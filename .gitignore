@@ -3,3 +3,4 @@
 *.koda
 .superpowers/
 .vscode/
+build/

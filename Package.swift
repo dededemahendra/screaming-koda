@@ -6,7 +6,9 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "KodaCore", targets: ["KodaCore"]),
+        .library(name: "KodaUI", targets: ["KodaUI"]),
         .executable(name: "koda", targets: ["koda"]),
+        .executable(name: "KodaApp", targets: ["KodaApp"]),
     ],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "6.29.3"),
@@ -23,11 +25,30 @@ let package = Package(
                 "SwiftSoup",
             ]
         ),
+        // Observable models for the app. Imports Observation but never AppKit or
+        // SwiftUI, so everything that matters stays testable under Command Line
+        // Tools, where there is no UI test harness.
+        .target(
+            name: "KodaUI",
+            dependencies: ["KodaCore"]
+        ),
+        .executableTarget(
+            name: "KodaApp",
+            dependencies: ["KodaUI"]
+        ),
         .executableTarget(
             name: "koda",
             dependencies: [
                 "KodaCore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ]
+        ),
+        .testTarget(
+            name: "KodaUITests",
+            dependencies: [
+                "KodaUI",
+                "KodaCore",
+                .product(name: "Testing", package: "swift-testing"),
             ]
         ),
         .testTarget(

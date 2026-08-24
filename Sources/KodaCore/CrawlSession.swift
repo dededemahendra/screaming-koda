@@ -31,6 +31,29 @@ public enum CrawlSession {
         return RobotsRules.parse(String(decoding: body, as: UTF8.self))
     }
 
+    /// Everything up to the first fetch: database, frontier seed, robots, engine.
+    ///
+    /// Split out from `start` because a UI needs to hold the engine in order to
+    /// stop it, and because opening the database is the step most likely to fail
+    /// in a way worth reporting before any crawling begins.
+    public static func prepare(
+        dbPath: String?,
+        config: CrawlConfig,
+        client: any HTTPClient,
+        parser: any PageParser
+    ) async throws -> (store: Store, engine: CrawlEngine) {
+        guard let seed = URLNormalizer.normalize(config.seedURL, relativeTo: nil) else {
+            throw CrawlSessionError.invalidSeedURL(config.seedURL)
+        }
+        let store = try Store(path: dbPath)
+        try store.migrate()
+        try store.initializeCrawl(config: config, startedAt: Date())
+        _ = try store.insertURLIfNew(seed, depth: 0, isInternal: true, discoveredAt: Date())
+
+        let robots = await fetchRobots(for: seed, client: client, config: config)
+        return (store, CrawlEngine(store: store, client: client, parser: parser, config: config, robots: robots))
+    }
+
     /// Creates the database, seeds the frontier, fetches robots, and runs the crawl to completion.
     @discardableResult
     public static func start(
@@ -40,17 +63,7 @@ public enum CrawlSession {
         parser: any PageParser,
         onProgress: (@Sendable (CrawlProgress) -> Void)?
     ) async throws -> Store {
-        guard let seed = URLNormalizer.normalize(config.seedURL, relativeTo: nil) else {
-            throw CrawlSessionError.invalidSeedURL(config.seedURL)
-        }
-
-        let store = try Store(path: dbPath)
-        try store.migrate()
-        try store.initializeCrawl(config: config, startedAt: Date())
-        _ = try store.insertURLIfNew(seed, depth: 0, isInternal: true, discoveredAt: Date())
-
-        let robots = await fetchRobots(for: seed, client: client, config: config)
-        let engine = CrawlEngine(store: store, client: client, parser: parser, config: config, robots: robots)
+        let (store, engine) = try await prepare(dbPath: dbPath, config: config, client: client, parser: parser)
         try await engine.run(onProgress: onProgress)
         return store
     }
