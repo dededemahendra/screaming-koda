@@ -301,9 +301,13 @@ struct Export: AsyncParsableCommand {
             reports = Reports.all
         }
 
-        let exports = try reports.map {
-            try store.export(report: $0, filter: $0.defaultFilter)
-        }
+        // exportAll rather than mapping the reports: it leads with the crawl
+        // overview, which is what a whole-crawl export should open on. Asking
+        // for a single report skips it, since an overview of one report is just
+        // that report.
+        let exports = report == nil
+            ? try store.exportAll(reports: reports)
+            : try reports.map { try store.export(report: $0, filter: $0.defaultFilter) }
         let base = (db as NSString).deletingPathExtension
         let destination = out ?? (format == "xlsx" ? base + ".xlsx" : base + "-csv")
 
