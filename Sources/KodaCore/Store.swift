@@ -185,7 +185,34 @@ public final class Store: @unchecked Sendable {
         m.registerMigration("v3-canonical-count") { db in
             try db.execute(sql: "ALTER TABLE page_facts ADD COLUMN canonical_count INTEGER NOT NULL DEFAULT 0")
         }
+        // `links` is the largest table by an order of magnitude, and counting
+        // internal inlinks reads all of it. On `(to_url_id)` alone that means
+        // fetching every row to see one flag; on `(to_url_id, is_internal)` the
+        // count is answered from the index. Widening the existing index rather
+        // than adding one keeps the write cost where it was.
+        m.registerMigration("v4-inlink-index") { db in
+            try db.execute(sql: """
+                DROP INDEX IF EXISTS idx_links_to;
+                CREATE INDEX idx_links_to ON links(to_url_id, is_internal);
+                """)
+        }
         return m
+    }
+
+    /// Refreshes the query planner's statistics.
+    ///
+    /// Without them SQLite has to guess how big each table is, and it guesses
+    /// that a join over `links` is as cheap as one over `responses`. On a crawl
+    /// of any size that turns "which links point at a 404" from an index lookup
+    /// into a scan of every link on the site — measured at sixty times slower.
+    ///
+    /// `PRAGMA optimize` rather than a bare `ANALYZE`: it only re-analyses tables
+    /// whose statistics have gone stale, so calling it repeatedly during a long
+    /// crawl costs almost nothing when nothing has changed much.
+    public func optimize() throws {
+        try dbQueue.writeWithoutTransaction { db in
+            try db.execute(sql: "PRAGMA optimize")
+        }
     }
 
     /// Deletes a crawl, sidecars included.

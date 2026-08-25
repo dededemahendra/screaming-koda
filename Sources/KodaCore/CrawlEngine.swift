@@ -41,10 +41,16 @@ public actor CrawlEngine {
     /// the bottleneck long before the network is.
     static let writeBatchSize = 100
 
+    /// How many write batches pass before the planner's statistics are refreshed.
+    /// Roughly two thousand URLs, which is often enough to keep live browsing
+    /// fast and rare enough that the pragma's own cost disappears.
+    static let batchesBetweenOptimize = 20
+
     private var crawled = 0
     private var discovered = 0
     private var checked = 0
     private var stopRequested = false
+    private var batchesSinceOptimize = 0
 
     public init(
         store: Store,
@@ -153,6 +159,17 @@ public actor CrawlEngine {
             if !results.isEmpty {
                 discovered += try store.write(results: results, config: config, now: Date())
                 crawled += results.count
+                batchesSinceOptimize += 1
+            }
+
+            // Results are browsable while the crawl runs, and the report queries
+            // that back that view are only fast when the planner has statistics.
+            // Waiting until the end would make live browsing slowest exactly
+            // while the crawl is growing. `PRAGMA optimize` is close to free when
+            // nothing has changed enough to need re-analysing.
+            if batchesSinceOptimize >= Self.batchesBetweenOptimize {
+                batchesSinceOptimize = 0
+                try? store.optimize()
             }
 
             try reportProgress(onProgress, stage: .crawling)
@@ -166,6 +183,7 @@ public actor CrawlEngine {
         try await checkRecordedURLs(onProgress: onProgress)
         if stopRequested { return try stoppedEarly() }
 
+        try? store.optimize()
         try store.markFinished(at: Date())
         return true
     }
@@ -175,6 +193,8 @@ public actor CrawlEngine {
     /// incomplete rather than silently looking done.
     private func stoppedEarly() throws -> Bool {
         try store.resetInFlight()
+        // A stopped crawl is one somebody is about to go and read.
+        try? store.optimize()
         return false
     }
 

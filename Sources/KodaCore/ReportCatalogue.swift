@@ -543,15 +543,20 @@ public enum ReportCatalogue {
             name: "Single inlink",
             summary: "Internal pages reachable by exactly one internal link. The closest honest signal to an orphan a crawl-only tool can give.",
             columns: ["URL", "Depth", "Inlinks"],
+            // Counted in a subquery over `links` rather than by joining every
+            // page to it: the grouped form is answered from `idx_links_to`
+            // alone, where the outer LEFT JOIN had to visit each page's rows in
+            // the table. Same rows out, an order of magnitude less work.
             sql: """
-                SELECT u.url AS "URL", u.depth AS "Depth", count(l.from_url_id) AS "Inlinks"
+                SELECT u.url AS "URL", u.depth AS "Depth", inlinks.n AS "Inlinks"
                 FROM urls u
                 JOIN page_facts pf ON pf.url_id = u.id
                 JOIN responses r ON r.url_id = u.id
-                LEFT JOIN links l ON l.to_url_id = u.id AND l.is_internal = 1
+                JOIN (
+                  SELECT to_url_id, count(*) AS n FROM links
+                  WHERE is_internal = 1 GROUP BY to_url_id HAVING count(*) = 1
+                ) inlinks ON inlinks.to_url_id = u.id
                 WHERE u.is_internal = 1 AND r.status = 200
-                GROUP BY u.id
-                HAVING count(l.from_url_id) = 1
                 ORDER BY u.url
                 """
         ),

@@ -351,3 +351,46 @@ private extension HTTPResponse {
         self.init(status: status, headers: headers, body: Data(bodyText.utf8), elapsedMs: elapsedMs)
     }
 }
+
+// MARK: - Inlink counting
+
+/// A site with one page behind exactly one internal link, one behind two, and
+/// one reached only from off-site. The rule is "exactly one internal inlink",
+/// and it is the closest honest signal to an orphan a crawl-only tool can give,
+/// so it is worth pinning rather than inferring from the SQL.
+private struct InlinkSite: HTTPClient {
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
+        func html(_ body: String) -> FetchOutcome {
+            .response(HTTPResponse(status: 200, headers: ["Content-Type": "text/html"],
+                                   body: Data("<html><head><title>T</title></head><body>\(body)</body></html>".utf8),
+                                   elapsedMs: 1))
+        }
+        switch url {
+        case "https://in.test/":
+            return html("<a href='/once'>Once</a><a href='/twice'>Twice</a><a href='/hub'>Hub</a>")
+        case "https://in.test/hub":
+            return html("<a href='/twice'>Twice again</a>")
+        case "https://in.test/once", "https://in.test/twice":
+            return html("<p>Leaf</p>")
+        default:
+            return .response(HTTPResponse(status: 404, headers: [:], body: Data(), elapsedMs: 1))
+        }
+    }
+}
+
+@Test func singleInlinkListsPagesWithExactlyOneInternalLinkToThem() async throws {
+    var config = CrawlConfig(seedURL: "https://in.test/")
+    config.checkExternalLinks = false
+    config.checkImages = false
+    let store = try await CrawlSession.start(dbPath: nil, config: config, client: InlinkSite(),
+                                             parser: SwiftSoupParser(), onProgress: nil)
+
+    let rows = try store.runReport(ReportCatalogue.report(id: "depth-single-inlink")!)
+    #expect(rows.map { $0[0] } == ["https://in.test/hub", "https://in.test/once"])
+    #expect(rows.allSatisfy { $0[2] == "1" }, "the inlink count is reported, and it is one")
+
+    // The seed has no inlink at all and /twice has two, so neither qualifies.
+    let listed = Set(rows.compactMap { $0[0] })
+    #expect(!listed.contains("https://in.test/twice"))
+    #expect(!listed.contains("https://in.test/"))
+}

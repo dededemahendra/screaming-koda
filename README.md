@@ -209,6 +209,14 @@ once a crawl passes 50,000 URLs.
 
 A `.koda` file is an ordinary SQLite database. Query it with anything.
 
+`links` is the largest table by an order of magnitude — roughly 40 rows a page —
+and most reports read it, so the crawl keeps SQLite's query statistics current
+rather than leaving them to the end. Without them the planner assumes a join over
+every link on the site costs the same as one over a handful of responses, which
+on a five thousand page crawl made one report sixty times slower than it needed
+to be. Counting a page's inlinks is answered from an index that carries the
+internal flag, so it never has to visit the table at all.
+
 `urls.state` is 0 queued, 1 in-flight, 2 done, 3 skipped, 4 claimed for a status
 check. The last two are separate on purpose: a skipped URL is an external link
 or an image, and recovering a crashed status check has to put it back to skipped

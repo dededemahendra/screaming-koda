@@ -176,3 +176,67 @@ private func makeForeignDatabase(at path: String) throws {
     // checked and should not have to check twice.
     try Store.removeDatabase(at: temporaryPath(".koda"))
 }
+
+// MARK: - Making the reports affordable
+
+/// A count over `links` is the most expensive thing the sidebar does, and the
+/// sidebar does it every half second while a crawl runs. Two things keep it
+/// affordable: an index the count can be answered from without touching the
+/// table, and statistics, without which SQLite guesses that a join over the
+/// largest table is as cheap as one over the smallest.
+
+@Test func theInlinkIndexCoversTheInternalFlag() throws {
+    let store = try Store(path: nil)
+    try store.migrate()
+    let columns = try store.dbQueue.read { db in
+        try Row.fetchAll(db, sql: "PRAGMA index_info(idx_links_to)").map { $0["name"] as String }
+    }
+    #expect(columns == ["to_url_id", "is_internal"],
+            "counting internal inlinks must not have to visit the table")
+}
+
+@Test func anOlderCrawlIsUpgradedWithoutLosingAnything() throws {
+    let path = NSTemporaryDirectory() + "koda-v1-\(UUID().uuidString).koda"
+    defer { try? Store.removeDatabase(at: path) }
+
+    // A database as an earlier version left it: the narrow index, no v4.
+    let old = try Store(path: path)
+    try old.migrate()
+    try old.initializeCrawl(config: CrawlConfig(seedURL: "https://old.test/"), startedAt: Date())
+    try old.dbQueue.write { db in
+        try db.execute(sql: "DROP INDEX idx_links_to; CREATE INDEX idx_links_to ON links(to_url_id)")
+        try db.execute(sql: "DELETE FROM grdb_migrations WHERE identifier = 'v4-inlink-index'")
+    }
+
+    let reopened = try Store(path: path)
+    try reopened.migrate()
+    let columns = try reopened.dbQueue.read { db in
+        try Row.fetchAll(db, sql: "PRAGMA index_info(idx_links_to)").map { $0["name"] as String }
+    }
+    #expect(columns == ["to_url_id", "is_internal"])
+    #expect(try reopened.crawlMeta()?.seedURL == "https://old.test/", "the crawl itself survives")
+}
+
+@Test func aFinishedCrawlLeavesStatisticsBehind() async throws {
+    var config = CrawlConfig(seedURL: "https://stats.test/")
+    config.checkExternalLinks = false
+    config.checkImages = false
+    let store = try await CrawlSession.start(dbPath: nil, config: config, client: StatsSite(),
+                                             parser: SwiftSoupParser(), onProgress: nil)
+
+    let analysed = try await store.dbQueue.read { db in
+        try Bool.fetchOne(db, sql: """
+            SELECT count(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_stat1'
+            """) ?? false
+    }
+    #expect(analysed, "without statistics every report query plans as if links were small")
+}
+
+private struct StatsSite: HTTPClient {
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
+        let body = url.hasSuffix("/") ? "<a href='/a'>A</a><a href='/b'>B</a>" : "<p>Leaf</p>"
+        return .response(HTTPResponse(
+            status: 200, headers: ["Content-Type": "text/html"],
+            body: Data("<html><head><title>T</title></head><body>\(body)</body></html>".utf8), elapsedMs: 1))
+    }
+}
