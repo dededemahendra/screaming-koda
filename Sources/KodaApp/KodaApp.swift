@@ -37,13 +37,13 @@ struct KodaApp: App {
             CommandGroup(after: .toolbar) {
                 Button("Export Current Report…") { exportCurrentReport() }
                     .keyboardShortcut("e", modifiers: [.command, .option])
-                    .disabled(model.table == nil)
+                    .disabled(model.table == nil || model.isExporting)
                 Button("Export Workbook…") { exportWorkbook() }
                     .keyboardShortcut("e")
-                    .disabled(model.store == nil)
+                    .disabled(model.store == nil || model.isExporting)
                 Button("Export CSVs…") { exportCSVs() }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
-                    .disabled(model.store == nil)
+                    .disabled(model.store == nil || model.isExporting)
             }
         }
     }
@@ -87,12 +87,8 @@ struct KodaApp: App {
         panel.nameFieldStringValue = "\(table.definition.id).csv"
         panel.prompt = "Export"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            try store.writeCSV(for: table.query, to: url.path)
-            reveal(url)
-        } catch {
-            present(error: "Export failed: \(error)")
-        }
+        let query = table.query
+        export(to: url) { try store.writeCSV(for: query, to: url.path) }
     }
 
     /// One workbook, one tab per report with findings. What you send someone.
@@ -103,12 +99,7 @@ struct KodaApp: App {
         panel.nameFieldStringValue = "\(model.crawlName).xlsx"
         panel.prompt = "Export"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            try store.writeXLSX(to: url.path)
-            reveal(url)
-        } catch {
-            present(error: "Export failed: \(error)")
-        }
+        export(to: url) { try store.writeXLSX(to: url.path) }
     }
 
     /// A directory of one CSV per report. What you feed a script.
@@ -121,15 +112,32 @@ struct KodaApp: App {
         panel.prompt = "Export"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let directory = url.appendingPathComponent(model.crawlName)
-        do {
-            let written = try store.writeAllCSVs(to: directory.path)
-            if written.isEmpty {
-                present(error: "No findings to export.", style: .informational)
-            } else {
-                reveal(directory)
+        Task { @MainActor in
+            do {
+                let written = try await model.runExport {
+                    try store.writeAllCSVs(to: directory.path)
+                }
+                if written.isEmpty {
+                    present(error: "No findings to export.", style: .informational)
+                } else {
+                    reveal(directory)
+                }
+            } catch {
+                present(error: "Export failed: \(error)")
             }
-        } catch {
-            present(error: "Export failed: \(error)")
+        }
+    }
+
+    /// Written off the main thread: an export is one long synchronous read, and
+    /// on a large crawl doing it here is seconds of a frozen window.
+    private func export(to url: URL, _ work: @escaping @Sendable () throws -> Void) {
+        Task { @MainActor in
+            do {
+                try await model.runExport(work)
+                reveal(url)
+            } catch {
+                present(error: "Export failed: \(error)")
+            }
         }
     }
 

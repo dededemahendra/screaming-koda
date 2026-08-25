@@ -2,6 +2,12 @@ import Foundation
 import KodaCore
 import Observation
 
+public enum ExportError: Error, CustomStringConvertible {
+    case alreadyRunning
+
+    public var description: String { "An export is already being written." }
+}
+
 /// Top-level window state: the crawl, which report is showing, what is selected.
 @MainActor
 @Observable
@@ -210,6 +216,29 @@ public final class AppModel {
             if !name.isEmpty { return name }
         }
         return "koda-reports"
+    }
+
+    /// True while an export is being written.
+    ///
+    /// Exports are one long synchronous read, and on a large crawl that is
+    /// seconds of it. Run where the menu item was clicked, that is seconds of a
+    /// beachball; the flag is what lets the menu say "already busy" instead of
+    /// starting a second one on top of the first.
+    public private(set) var isExporting = false
+
+    /// Writes an export off the main thread.
+    ///
+    /// The work is a closure rather than a method per format because the view is
+    /// what knows where the user chose to put the file, and this is the only part
+    /// worth having in a testable place.
+    @discardableResult
+    public func runExport<Result: Sendable>(
+        _ work: @escaping @Sendable () throws -> Result
+    ) async throws -> Result {
+        guard !isExporting else { throw ExportError.alreadyRunning }
+        isExporting = true
+        defer { isExporting = false }
+        return try await Task.detached(priority: .userInitiated) { try work() }.value
     }
 
     public func clearError() {

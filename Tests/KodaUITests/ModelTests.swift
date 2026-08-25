@@ -675,3 +675,29 @@ private struct HreflangSite: HTTPClient {
     model.reset()
     #expect(model.summary == nil)
 }
+
+// MARK: - Exporting
+
+@MainActor
+@Test func anExportRunsAwayFromTheMainThreadAndSaysWhileItIs() async throws {
+    let controller = CrawlController(clientFactory: { FixtureSite() })
+    let model = AppModel(controller: controller)
+    controller.start(config: CrawlConfig(seedURL: "https://fx.test/"), dbPath: nil)
+    try await waitUntil { !controller.phase.isRunning }
+
+    #expect(!model.isExporting)
+    let written = try await model.runExport { 42 }
+    #expect(written == 42)
+    #expect(!model.isExporting, "and stops saying so afterwards")
+}
+
+@MainActor
+@Test func anExportThatFailsStillClearsTheFlag() async throws {
+    let model = AppModel(controller: CrawlController(clientFactory: { FixtureSite() }))
+    struct Boom: Error {}
+    await #expect(throws: Boom.self) {
+        try await model.runExport { throw Boom() }
+    }
+    // Otherwise one failed export disables the menu for the rest of the session.
+    #expect(!model.isExporting)
+}
