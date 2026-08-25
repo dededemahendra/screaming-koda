@@ -130,7 +130,7 @@ public final class AppModel {
 
     /// Opens a finished crawl for browsing, and adopts the settings it ran with
     /// so the form describes what is on screen rather than the app's defaults.
-    public func openDatabase(path: String) throws {
+    public func openDatabase(path: String) async throws {
         reset()
         try controller.open(path: path)
         if let config = try store?.loadConfig() {
@@ -138,7 +138,9 @@ public final class AppModel {
             seedURL = config.seedURL
             settings = CrawlSettings(from: config)
         }
-        refresh()
+        // Async because reading the crawl is: opening a large one should not hold
+        // the main thread while sixty counts are taken.
+        await refresh()
     }
 
     /// Where a new crawl of `seed` goes by default: named after the host, beside
@@ -224,22 +226,45 @@ public final class AppModel {
 
     /// Re-reads counts and the visible table. Called on a throttled timer while a
     /// crawl is running: WAL means these reads never block the writer.
-    public func refresh() {
+    ///
+    /// The counts are gathered off the main thread. There are sixty of them, over
+    /// tables the crawl is still growing, and holding the main thread for the
+    /// length of that is how a window stops redrawing on exactly the crawls big
+    /// enough to be worth watching.
+    public func refresh() async {
         guard let store else { return }
+        if table == nil, let definition = ReportCatalogue.report(id: selectedReportID) {
+            table = ReportTableModel(store: store, definition: definition)
+        }
+        let started = Date()
+        defer { lastRefreshDuration = Date().timeIntervalSince(started) }
         do {
-            if table == nil, let definition = ReportCatalogue.report(id: selectedReportID) {
-                table = ReportTableModel(store: store, definition: definition)
-            }
-            liveCounts = try store.urlCounts()
-            reportCounts = try store.reportCounts()
-            summary = try store.summary()
-            meta = try store.crawlMeta()
+            let snapshot = try await store.snapshot()
+            // The crawl may have been closed or replaced while that was in
+            // flight, in which case these numbers describe a database nobody is
+            // looking at any more.
+            guard self.store === store else { return }
+            liveCounts = snapshot.urlCounts
+            reportCounts = snapshot.reportCounts
+            summary = snapshot.summary
+            meta = snapshot.meta
             table?.reload()
             errorMessage = nil
         } catch {
             errorMessage = String(describing: error)
         }
     }
+
+    /// How long the last refresh took.
+    ///
+    /// The refresh loop waits at least this long again before the next one, so
+    /// the app never spends more than half its time counting. A crawl of a
+    /// thousand pages refreshes twice a second; one of half a million refreshes
+    /// as often as it can afford to, instead of queueing work it cannot finish.
+    public private(set) var lastRefreshDuration: TimeInterval = 0
+
+    /// How long to wait before refreshing again.
+    public var refreshInterval: TimeInterval { max(0.5, lastRefreshDuration) }
 
     /// Called when a crawl is started so stale results do not linger on screen.
     public func reset() {

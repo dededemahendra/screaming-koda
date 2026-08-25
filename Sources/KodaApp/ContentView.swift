@@ -53,10 +53,13 @@ struct ContentView: View {
         // browsed while the crawl is still running.
         .task(id: controller.phase) {
             while controller.phase.isRunning {
-                model.refresh()
-                try? await Task.sleep(nanoseconds: 500_000_000)
+                await model.refresh()
+                // Paced by what the last pass cost rather than by a fixed
+                // interval, so a crawl too large to count twice a second slows
+                // the counting down instead of falling behind on it.
+                try? await Task.sleep(for: .seconds(model.refreshInterval))
             }
-            model.refresh()
+            await model.refresh()
         }
     }
 

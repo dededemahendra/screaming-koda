@@ -56,6 +56,11 @@ currently says, because the frontier was already filtered by those rules.
 Sorting and filtering re-query rather than sorting in memory, so they cost the
 same on a half-million-row crawl as on a small one.
 
+The live counts are read off the main thread, and the next read waits at least
+as long as the last one took. A crawl of a thousand pages refreshes twice a
+second; one large enough that a pass costs more than that refreshes as often as
+it can afford to, rather than queueing work it will never finish.
+
 ## Usage
 
 ```bash

@@ -31,6 +31,12 @@ public enum DatabaseKind: Sendable {
 public final class Store: @unchecked Sendable {
     public let dbQueue: DatabaseQueue
 
+    /// Where `snapshot()` does its reading, so a caller on the main thread never
+    /// waits on the database there. One queue per store: a crawl and the window
+    /// browsing it are the same store, and serialising their reads against each
+    /// other is fine, while serialising them against another crawl's would not be.
+    let readQueue = DispatchQueue(label: "co.sistercreatives.screamingkoda.snapshot", qos: .utility)
+
     /// - Parameter path: file path, or nil for an in-memory database (tests).
     public init(path: String?) throws {
         var config = Configuration()

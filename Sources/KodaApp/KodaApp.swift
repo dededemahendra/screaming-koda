@@ -56,13 +56,15 @@ struct KodaApp: App {
     }
 
     private func load(path: String) {
-        do {
-            try model.openDatabase(path: path)
-            // The system keeps this list, so it survives relaunches and shows up
-            // under the Dock icon as well as in the menu.
-            NSDocumentController.shared.noteNewRecentDocumentURL(URL(fileURLWithPath: path))
-        } catch {
-            present(error: "Could not open \((path as NSString).lastPathComponent): \(error)")
+        Task { @MainActor in
+            do {
+                try await model.openDatabase(path: path)
+                // The system keeps this list, so it survives relaunches and shows
+                // up under the Dock icon as well as in the menu.
+                NSDocumentController.shared.noteNewRecentDocumentURL(URL(fileURLWithPath: path))
+            } catch {
+                present(error: "Could not open \((path as NSString).lastPathComponent): \(error)")
+            }
         }
     }
 

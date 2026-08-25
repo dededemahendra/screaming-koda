@@ -68,3 +68,35 @@ extension Store {
         }
     }
 }
+
+/// Everything the window shows about a crawl, gathered in one go.
+public struct CrawlSnapshot: Sendable {
+    public let urlCounts: (queued: Int, inFlight: Int, done: Int, total: Int)
+    public let reportCounts: [String: Int]
+    public let summary: CrawlSummary
+    public let meta: CrawlMeta?
+}
+
+extension Store {
+    /// The whole window's worth of counts, off the calling thread.
+    ///
+    /// Sixty-odd aggregate queries, and a UI that wants them twice a second while
+    /// a crawl writes underneath. Run where the caller is, that is the main
+    /// thread stalling for as long as the crawl is large; run here, it is
+    /// GRDB's own queue, which is where database work belongs. The caller waits
+    /// without blocking anything.
+    public func snapshot() async throws -> CrawlSnapshot {
+        try await withCheckedThrowingContinuation { continuation in
+            readQueue.async {
+                continuation.resume(with: Result {
+                    CrawlSnapshot(
+                        urlCounts: try self.urlCounts(),
+                        reportCounts: try self.reportCounts(),
+                        summary: try self.summary(),
+                        meta: try self.crawlMeta()
+                    )
+                })
+            }
+        }
+    }
+}

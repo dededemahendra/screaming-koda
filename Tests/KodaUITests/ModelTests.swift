@@ -155,7 +155,7 @@ private let duplicateTitles = ReportCatalogue.report(id: "titles-duplicate")!
     let model = AppModel(controller: controller)
     controller.start(config: CrawlConfig(seedURL: "https://fx.test/"), dbPath: nil)
     try await waitUntil { !controller.phase.isRunning }
-    model.refresh()
+    await model.refresh()
 
     #expect(model.summary != nil)
     #expect(!model.visibleGroups.isEmpty)
@@ -173,7 +173,7 @@ private let duplicateTitles = ReportCatalogue.report(id: "titles-duplicate")!
     let model = AppModel(controller: controller)
     controller.start(config: CrawlConfig(seedURL: "https://fx.test/"), dbPath: nil)
     try await waitUntil { !controller.phase.isRunning }
-    model.refresh()
+    await model.refresh()
     model.select(reportID: "internal-all")
     model.table?.toggleSort(column: 0)
 
@@ -194,16 +194,16 @@ private let duplicateTitles = ReportCatalogue.report(id: "titles-duplicate")!
     let model = AppModel(controller: controller)
     controller.start(config: CrawlConfig(seedURL: "https://fx.test/"), dbPath: nil)
     try await waitUntil { !controller.phase.isRunning }
-    model.refresh()
+    await model.refresh()
     model.select(reportID: "depth-distribution")
     model.selectRow(at: 0)
     #expect(model.selectedDetail == nil, "a histogram row has no URL to inspect")
 }
 
 @MainActor
-@Test func refreshBeforeAnyCrawlIsHarmless() {
+@Test func refreshBeforeAnyCrawlIsHarmless() async {
     let model = AppModel(controller: CrawlController(clientFactory: { FixtureSite() }))
-    model.refresh()
+    await model.refresh()
     #expect(model.table == nil)
     #expect(model.summary == nil)
     #expect(model.errorMessage == nil)
@@ -230,7 +230,7 @@ private func waitUntil(timeout: TimeInterval = 10, _ condition: @MainActor () ->
 
     controller.start(config: CrawlConfig(seedURL: "https://fx.test/"), dbPath: nil)
     try await waitUntil { !controller.phase.isRunning }
-    model.refresh()
+    await model.refresh()
 
     let counts = try #require(model.liveCounts)
     #expect(counts.done > FixtureSite.pageCount)
@@ -320,7 +320,7 @@ private func scratchModel(client: @escaping @Sendable () -> any HTTPClient = { F
 
     let (model, cleanup) = scratchModel()
     defer { cleanup() }
-    try model.openDatabase(path: path)
+    try await model.openDatabase(path: path)
 
     #expect(model.seedURL == "https://fx.test/")
     #expect(model.settings.maxDepthText == "2")
@@ -401,7 +401,7 @@ private struct SlowFixtureSite: HTTPClient {
     // A fresh app, opening the file someone quit halfway through.
     let (reopened, cleanupReopened) = scratchModel(client: { SlowFixtureSite() })
     defer { cleanupReopened() }
-    try reopened.openDatabase(path: path)
+    try await reopened.openDatabase(path: path)
 
     #expect(reopened.controller.phase == .stopped, "an unfinished crawl is not a finished one")
     #expect(reopened.canResume)
@@ -417,7 +417,7 @@ private struct SlowFixtureSite: HTTPClient {
 
     let (model, cleanup) = scratchModel()
     defer { cleanup() }
-    try model.openDatabase(path: path)
+    try await model.openDatabase(path: path)
 
     #expect(model.controller.phase == .finished)
     #expect(!model.canResume)
@@ -534,7 +534,7 @@ private struct SlowExternalFixtureSite: HTTPClient {
 
     let (model, cleanup) = scratchModel(client: { HreflangSite() })
     defer { cleanup() }
-    try model.openDatabase(path: path)
+    try await model.openDatabase(path: path)
     model.select(reportID: "internal-all")
     model.table?.toggleSort(column: 0)
     model.selectRow(at: 0)
@@ -579,7 +579,7 @@ private struct HreflangSite: HTTPClient {
 
     let (model, cleanup) = scratchModel()
     defer { cleanup() }
-    try model.openDatabase(path: path)
+    try await model.openDatabase(path: path)
     #expect(!model.canResume, "a finished crawl is not resumable")
     #expect(model.startPlan(databasePath: path) == .replaces(path: path))
 
@@ -637,4 +637,41 @@ private struct HreflangSite: HTTPClient {
 
     #expect(model.controller.phase == .finished)
     #expect(model.errorMessage == nil)
+}
+
+// MARK: - Pacing the refresh
+
+@MainActor
+@Test func refreshPacesItselfByWhatTheLastPassCost() async throws {
+    let controller = CrawlController(clientFactory: { FixtureSite() })
+    let model = AppModel(controller: controller)
+
+    // Nothing measured yet, so the interval is the floor rather than zero: a
+    // loop that reads it before the first pass must not spin.
+    #expect(model.refreshInterval == 0.5)
+
+    controller.start(config: CrawlConfig(seedURL: "https://fx.test/"), dbPath: nil)
+    try await waitUntil { !controller.phase.isRunning }
+    await model.refresh()
+
+    #expect(model.lastRefreshDuration > 0, "the pass was timed")
+    #expect(model.refreshInterval >= model.lastRefreshDuration,
+            "the app never spends more than half its time counting")
+    #expect(model.refreshInterval >= 0.5, "and never busier than twice a second")
+}
+
+@MainActor
+@Test func aRefreshThatLandsAfterTheCrawlWasReplacedIsDropped() async throws {
+    let controller = CrawlController(clientFactory: { FixtureSite() })
+    let model = AppModel(controller: controller)
+    controller.start(config: CrawlConfig(seedURL: "https://fx.test/"), dbPath: nil)
+    try await waitUntil { !controller.phase.isRunning }
+    await model.refresh()
+    #expect(model.summary != nil)
+
+    // Counting now happens off the main thread, so a pass can still be in flight
+    // when the crawl it was reading is closed. Publishing it then would put a
+    // dead crawl's numbers on screen beside a live one's.
+    model.reset()
+    #expect(model.summary == nil)
 }
