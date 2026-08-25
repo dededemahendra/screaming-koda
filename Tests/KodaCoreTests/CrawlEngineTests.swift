@@ -391,3 +391,81 @@ private struct StallingSite: HTTPClient {
     #expect(before != nil, "the slow page was crawled")
     #expect(before == 10, "fast pages must keep flowing while one URL hangs, got \(before ?? -1)")
 }
+
+/// A site whose hub page carries a page-level nofollow directive.
+private struct NofollowSite: HTTPClient {
+    /// Where the directive lives: a meta tag, or the X-Robots-Tag header.
+    let inHeader: Bool
+    let directive: String
+
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
+        if url.hasSuffix("robots.txt") {
+            return .response(HTTPResponse(status: 404, headers: [:], body: Data(), elapsedMs: 1))
+        }
+        var headers = ["Content-Type": "text/html"]
+        var meta = ""
+        if url == "https://nf.test/hub" {
+            if inHeader { headers["X-Robots-Tag"] = directive } else {
+                meta = "<meta name=\"robots\" content=\"\(directive)\">"
+            }
+        }
+        let body = url == "https://nf.test/"
+            ? "<html><head><title>H</title></head><body><h1>H</h1><a href='/hub'>Hub</a></body></html>"
+            : "<html><head><title>P</title>\(meta)</head><body><h1>P</h1><a href='/deep'>Deep</a></body></html>"
+        return .response(HTTPResponse(status: 200, headers: headers, body: Data(body.utf8), elapsedMs: 1))
+    }
+}
+
+private func nofollowPaths(inHeader: Bool, directive: String, follow: Bool = false) async throws -> [String] {
+    var config = CrawlConfig(seedURL: "https://nf.test/")
+    config.workers = 2
+    config.followInternalNofollow = follow
+    config.checkExternalLinks = false
+    config.checkImages = false
+    let store = try await CrawlSession.start(
+        dbPath: nil, config: config, client: NofollowSite(inHeader: inHeader, directive: directive),
+        parser: SwiftSoupParser(), onProgress: nil
+    )
+    return try await store.dbQueue.read { db in
+        try String.fetchAll(db, sql: """
+            SELECT u.path FROM urls u JOIN responses r ON r.url_id = u.id ORDER BY u.path
+            """)
+    }
+}
+
+@Test func aPageLevelNofollowStopsTheCrawlAtThatPage() async throws {
+    // rel=nofollow on a link and nofollow on the page are the same directive,
+    // written in two places. Honouring one and not the other means a crawl that
+    // says it respects nofollow and does not.
+    #expect(try await nofollowPaths(inHeader: false, directive: "nofollow") == ["/", "/hub"])
+    #expect(try await nofollowPaths(inHeader: false, directive: "noindex, nofollow") == ["/", "/hub"])
+    #expect(try await nofollowPaths(inHeader: false, directive: "none") == ["/", "/hub"],
+            "none is the shorthand for noindex plus nofollow")
+    #expect(try await nofollowPaths(inHeader: true, directive: "nofollow") == ["/", "/hub"],
+            "X-Robots-Tag says the same thing in a header")
+
+    #expect(try await nofollowPaths(inHeader: false, directive: "noindex") == ["/", "/deep", "/hub"],
+            "noindex is about indexing, not crawling")
+    #expect(try await nofollowPaths(inHeader: false, directive: "nofollow", follow: true)
+        == ["/", "/deep", "/hub"], "--follow-nofollow governs both forms")
+}
+
+@Test func aNofollowPageStillContributesToTheLinkGraph() async throws {
+    var config = CrawlConfig(seedURL: "https://nf.test/")
+    config.workers = 2
+    config.checkExternalLinks = false
+    config.checkImages = false
+    let store = try await CrawlSession.start(
+        dbPath: nil, config: config, client: NofollowSite(inHeader: false, directive: "nofollow"),
+        parser: SwiftSoupParser(), onProgress: nil
+    )
+    let targets = try await store.dbQueue.read { db in
+        try String.fetchAll(db, sql: """
+            SELECT dst.path FROM links l JOIN urls dst ON dst.id = l.to_url_id
+            JOIN urls src ON src.id = l.from_url_id WHERE src.path = '/hub'
+            """)
+    }
+    // Not crawling it is not the same as not knowing about it: the inspector's
+    // outlinks pane and the broken-link report both read this table.
+    #expect(targets == ["/deep"])
+}

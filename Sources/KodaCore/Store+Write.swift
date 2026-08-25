@@ -89,12 +89,22 @@ extension Store {
             ]
         )
 
+        // A page-level nofollow applies to every link on the page. It is the same
+        // directive as rel=nofollow, in a meta tag or a header instead of an
+        // attribute, so the same setting governs both. `content=none` is the
+        // shorthand for noindex plus nofollow.
+        let pageNofollow = !config.followInternalNofollow
+            && [facts.metaRobots, result.xRobotsTag].contains {
+                guard let directive = $0?.lowercased() else { return false }
+                return directive.contains("nofollow") || directive.contains("none")
+            }
+
         try db.execute(sql: "DELETE FROM links WHERE from_url_id = ?", arguments: [result.urlID])
         for link in facts.links {
             guard let target = URLNormalizer.normalize(link.href, relativeTo: base) else { continue }
             let isInternal = Self.isInternal(target, seedHost: seedHost, config: config)
             let isNofollow = link.rel?.lowercased().contains("nofollow") == true
-            let crawlable = isInternal && (!isNofollow || config.followInternalNofollow)
+            let crawlable = isInternal && !pageNofollow && (!isNofollow || config.followInternalNofollow)
 
             // nil means the URL was filtered out — skip just this link, never the transaction.
             guard let targetID = try Self.upsertURLOrSkip(db, target, parentDepth: result.depth, config: config,

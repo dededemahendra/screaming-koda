@@ -152,6 +152,17 @@ detection is out of scope.
 Politeness settings are defaults, not options. The crawler respects robots.txt
 and `Crawl-delay`, identifies as `ScreamingKoda/0.1`, times out at 20 seconds,
 and does not follow internal `nofollow` links or crawl subdomains unless asked.
+`nofollow` means the attribute on a link and the directive on a page — as a
+`meta name=robots` tag or an `X-Robots-Tag` header, including the `none`
+shorthand. `--follow-nofollow` governs all of them. `noindex` is about indexing,
+not crawling, and is only reported.
+
+Only markup is read. Anything else — a PDF, an archive, a video — is recorded
+from its headers and its body is never downloaded, and markup itself stops at
+8 MB. A crawler that buffers whatever a site links to is one large file away
+from running out of memory.
+
+Relative URLs resolve against `<base href>` when a page declares one.
 
 External links and images are status-checked with HEAD after the internal crawl
 finishes, so a slow third-party host can never starve the crawl of the site you
