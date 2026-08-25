@@ -177,3 +177,102 @@ private func withFixtureServer<T>(_ body: (FixtureServer) async throws -> T) asy
     let decompressed = try #require(body.flatMap { Gzip.decompress($0) })
     #expect(String(decoding: decompressed, as: UTF8.self).contains("Shared Title"))
 }
+
+// MARK: - What gets read, and how much of it
+
+/// Serves files written for one test rather than the committed fixture site.
+/// A three-megabyte binary is worth crawling against and not worth committing.
+private func withTemporarySite<T>(
+    _ files: [String: Data], _ body: (FixtureServer) async throws -> T
+) async throws -> T {
+    let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("koda-site-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    for (name, data) in files {
+        try data.write(to: directory.appendingPathComponent(name))
+    }
+    // The readiness probe asks for index.html, so every site needs one.
+    if files["index.html"] == nil {
+        try Data("<html><head><title>Ready</title></head><body></body></html>".utf8)
+            .write(to: directory.appendingPathComponent("index.html"))
+    }
+
+    let server = try FixtureServer(directory: directory)
+    defer { server.stop() }
+    try await server.waitUntilReady()
+    return try await body(server)
+}
+
+private func fetched(_ url: String, client: URLSessionHTTPClient) async throws -> HTTPResponse {
+    let outcome = await client.fetch(url: url, method: "GET", userAgent: "probe", timeout: 20)
+    guard case .response(let response) = outcome else {
+        throw FixtureServer.ServerError.message("expected a response, got \(outcome)")
+    }
+    return response
+}
+
+@Test func aNonMarkupResponseIsRecordedFromItsHeadersWithoutBeingRead() async throws {
+    // A crawler follows whatever the site links to, which on a real site means
+    // PDFs, archives and video. Buffering them costs their full size in memory
+    // and in bandwidth for a body nothing will ever parse.
+    let response = try await withTemporarySite(["big.bin": Data(repeating: 0x41, count: 3_000_000)]) { server in
+        try await fetched("http://127.0.0.1:\(server.port)/big.bin", client: URLSessionHTTPClient())
+    }
+    #expect(response.status == 200)
+    #expect(response.body == nil, "an octet-stream is not read")
+    #expect(response.declaredContentLength == 3_000_000, "but its size is still recorded")
+}
+
+@Test func markupPastTheSizeCapIsTruncatedRatherThanFollowed() async throws {
+    let page = "<html><head><title>Enormous</title></head><body>"
+        + String(repeating: "<p>padding</p>", count: 40_000) + "</body></html>"
+    let response = try await withTemporarySite(["huge.html": Data(page.utf8)]) { server in
+        try await fetched("http://127.0.0.1:\(server.port)/huge.html",
+                          client: URLSessionHTTPClient(maxBodyBytes: 64 * 1024))
+    }
+    #expect(response.status == 200)
+    let body = try #require(response.body)
+    #expect(body.count <= 64 * 1024)
+    #expect(body.count < page.utf8.count, "the whole page is far past the cap")
+    // Truncated markup still parses, and what a report cares about is in the head.
+    let facts = try SwiftSoupParser().parse(html: String(decoding: body, as: UTF8.self))
+    #expect(facts.title == "Enormous")
+}
+
+@Test func robotsTxtIsStillReadEvenThoughItIsNotMarkup() async throws {
+    let response = try await withFixtureServer { server in
+        try await fetched("http://127.0.0.1:\(server.port)/robots.txt", client: URLSessionHTTPClient())
+    }
+    #expect(response.body?.isEmpty == false, "text/plain is read; the crawl depends on this one")
+}
+
+@Test func aCrawlRecordsAnAssetsSizeWithoutDownloadingIt() async throws {
+    let size = try await withTemporarySite([
+        "index.html": Data("<html><head><title>H</title></head><body><h1>H</h1><a href='/big.bin'>Big</a></body></html>".utf8),
+        "big.bin": Data(repeating: 0x41, count: 3_000_000),
+    ]) { server in
+        var config = CrawlConfig(seedURL: "http://127.0.0.1:\(server.port)/index.html")
+        config.workers = 2
+        let store = try await CrawlSession.start(dbPath: nil, config: config,
+                                                 client: URLSessionHTTPClient(),
+                                                 parser: SwiftSoupParser(), onProgress: nil)
+        return try await store.dbQueue.read { db in
+            try Int.fetchOne(db, sql: """
+                SELECT r.content_length FROM responses r JOIN urls u ON u.id = r.url_id
+                WHERE u.path = '/big.bin'
+                """)
+        }
+    }
+    #expect(size == 3_000_000, "the size comes from Content-Length, not from counting bytes")
+}
+
+@Test func theTextualTestKeepsMarkupAndDropsBinaries() {
+    for type in ["text/html; charset=utf-8", "TEXT/PLAIN", "application/xhtml+xml",
+                 "application/xml", "text/csv", nil, "", "   "] {
+        #expect(BodyCollector.isTextual(type), "\(type ?? "nil") should be read")
+    }
+    for type in ["application/pdf", "image/png", "video/mp4", "application/octet-stream", "font/woff2"] {
+        #expect(!BodyCollector.isTextual(type), "\(type) should not be read")
+    }
+}

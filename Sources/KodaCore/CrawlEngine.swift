@@ -333,7 +333,9 @@ public actor CrawlEngine {
                 urlID: item.id, url: item.url, depth: item.depth,
                 status: response.status, errorKind: nil,
                 contentType: response.contentType,
-                contentLength: response.body?.count,
+                // The header first: a PDF's body is never read, and a page over
+                // the size cap was only read as far as the cap.
+                contentLength: response.declaredContentLength ?? response.body?.count,
                 responseTimeMs: response.elapsedMs,
                 redirectTarget: redirectTarget, bodyGz: bodyGz,
                 xRobotsTag: response.header("x-robots-tag"), facts: facts

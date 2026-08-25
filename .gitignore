@@ -4,3 +4,4 @@
 .superpowers/
 .vscode/
 build/
+.claude-logs/

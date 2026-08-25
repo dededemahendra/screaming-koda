@@ -91,11 +91,148 @@ private final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendab
     }
 }
 
+/// Reads a response, keeping only as much of the body as is worth keeping.
+///
+/// A crawler follows whatever the site links to, which on a real site includes
+/// PDFs, installers and video. `URLSession.data(for:)` buffers all of it before
+/// returning, so one such link costs its full size in memory and in bandwidth
+/// for a body that will never be parsed. Its `bytes(for:)` alternative streams,
+/// but iterates one byte at a time: measured against a 64KB page it ran roughly
+/// three hundred times slower than `data(for:)`, which is not a trade a crawler
+/// can make.
+///
+/// A data delegate gets chunks and can cancel, which is what was wanted. It
+/// declines the body of anything that is not markup, and stops reading markup
+/// that runs past the cap rather than following it wherever it goes.
+final class BodyCollector: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private let limit: Int
+    private let wantsBody: Bool
+    private let onFinish: @Sendable (Result<(HTTPURLResponse, Data?), Error>) -> Void
+
+    private let lock = NSLock()
+    private var response: HTTPURLResponse?
+    private var body = Data()
+    private var stoppedEarly = false
+    private var finished = false
+
+    init(limit: Int, wantsBody: Bool,
+         onFinish: @escaping @Sendable (Result<(HTTPURLResponse, Data?), Error>) -> Void) {
+        self.limit = limit
+        self.wantsBody = wantsBody
+        self.onFinish = onFinish
+    }
+
+    /// Redirects stay unfollowed here too: a task delegate takes precedence over
+    /// the session's, so leaving this out would quietly re-enable them.
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+
+    /// The completion-handler form rather than the `async` one: this runs on
+    /// URLSession's delegate queue and takes a lock, which is not allowed from an
+    /// asynchronous context.
+    func urlSession(
+        _ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+        completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+    ) {
+        guard let http = response as? HTTPURLResponse else {
+            completionHandler(.cancel)
+            return
+        }
+        lock.lock()
+        self.response = http
+        lock.unlock()
+
+        guard wantsBody, Self.isTextual(http.value(forHTTPHeaderField: "Content-Type")) else {
+            complete(.success((http, nil)))
+            completionHandler(.cancel)
+            return
+        }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        lock.lock()
+        let overflowed = body.count + data.count >= limit
+        if overflowed {
+            body.append(data.prefix(max(0, limit - body.count)))
+            stoppedEarly = true
+        } else {
+            body.append(data)
+        }
+        let http = response
+        lock.unlock()
+
+        // Truncated markup still parses: SwiftSoup closes what is open, and the
+        // head is where everything a report cares about lives.
+        if overflowed, let http {
+            complete(.success((http, bodySnapshot())))
+            dataTask.cancel()
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: (any Error)?) {
+        lock.lock()
+        let http = response
+        let ours = stoppedEarly
+        lock.unlock()
+
+        // A cancellation we asked for is a success; the caller's is not.
+        if let error, !(ours && (error as? URLError)?.code == .cancelled) {
+            complete(.failure(error))
+        } else if let http {
+            complete(.success((http, wantsBody ? bodySnapshot() : nil)))
+        } else {
+            complete(.failure(URLError(.badServerResponse)))
+        }
+    }
+
+    /// What is worth reading: markup, and text generally, because robots.txt is
+    /// `text/plain` and the crawl depends on it.
+    ///
+    /// A missing or empty Content-Type reads the body too. Unknown is not the
+    /// same as binary, and a server that omits the header on its HTML is a
+    /// server whose site would otherwise crawl as a single blank page.
+    static func isTextual(_ contentType: String?) -> Bool {
+        guard let type = contentType?.lowercased(),
+              !type.trimmingCharacters(in: .whitespaces).isEmpty else { return true }
+        return type.hasPrefix("text/") || type.contains("html") || type.contains("xml")
+    }
+
+    private func bodySnapshot() -> Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return body
+    }
+
+    /// Exactly once: a cancelled task still reports completion afterwards, and
+    /// resuming a continuation twice is a crash.
+    private func complete(_ result: Result<(HTTPURLResponse, Data?), Error>) {
+        lock.lock()
+        let alreadyFinished = finished
+        finished = true
+        lock.unlock()
+        guard !alreadyFinished else { return }
+        onFinish(result)
+    }
+}
+
 public struct URLSessionHTTPClient: HTTPClient {
+    /// The most of one response to keep. Real HTML is orders of magnitude below
+    /// this; past it a crawler has stopped reading a page and started
+    /// downloading a file.
+    public static let defaultMaxBodyBytes = 8 * 1024 * 1024
+
     private let session: URLSession
+    private let maxBodyBytes: Int
     private static let delegate = NoRedirectDelegate()
 
-    public init(session: URLSession? = nil) {
+    public init(session: URLSession? = nil, maxBodyBytes: Int = defaultMaxBodyBytes) {
+        self.maxBodyBytes = maxBodyBytes
         if let session {
             self.session = session
         } else {
@@ -116,21 +253,31 @@ public struct URLSessionHTTPClient: HTTPClient {
         request.setValue("text/html,application/xhtml+xml,*/*;q=0.8", forHTTPHeaderField: "Accept")
 
         let start = DispatchTime.now().uptimeNanoseconds
-        do {
-            let (data, response) = try await session.data(for: request, delegate: Self.delegate)
-            let elapsed = Int((DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
-            guard let http = response as? HTTPURLResponse else {
-                return .failure(kind: "nonHTTPResponse")
+        let task = session.dataTask(with: request)
+        let result: Result<(HTTPURLResponse, Data?), Error> = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                task.delegate = BodyCollector(limit: maxBodyBytes, wantsBody: method != "HEAD") {
+                    continuation.resume(returning: $0)
+                }
+                task.resume()
             }
+        } onCancel: {
+            task.cancel()
+        }
+
+        let elapsed = Int((DispatchTime.now().uptimeNanoseconds - start) / 1_000_000)
+        switch result {
+        case .failure(let error as URLError):
+            return .failure(kind: urlErrorKindName(error.code))
+        case .failure(let error):
+            return .failure(kind: "\(type(of: error))")
+        case .success(let (http, body)):
             var headers: [String: String] = [:]
             for (key, value) in http.allHeaderFields {
                 if let k = key as? String, let v = value as? String { headers[k] = v }
             }
-            return .response(HTTPResponse(status: http.statusCode, headers: headers, body: data, elapsedMs: elapsed))
-        } catch let error as URLError {
-            return .failure(kind: urlErrorKindName(error.code))
-        } catch {
-            return .failure(kind: "\(type(of: error))")
+            return .response(HTTPResponse(status: http.statusCode, headers: headers,
+                                          body: body, elapsedMs: elapsed))
         }
     }
 }
