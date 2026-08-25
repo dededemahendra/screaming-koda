@@ -262,3 +262,41 @@ private func makeFacts(links: [LinkFact] = [], images: [ImageFact] = [], hreflan
     #expect(counts.queued == 1, "the internal link is queued; the seed itself is now done, the external link is skipped")
     #expect(counts.done == 1, "the seed page was crawled by this very result")
 }
+
+@Test func relativeLinksResolveAgainstBaseHref() async throws {
+    // A page that declares <base href> resolves every relative URL in it against
+    // that, not against its own address. Ignoring it does not fail loudly: it
+    // invents URLs that do not exist and misses the ones that do.
+    let store = try Store(path: nil)
+    try store.migrate()
+    var config = CrawlConfig(seedURL: "https://base.test/")
+    config.crawlSubdomains = false
+    try store.initializeCrawl(config: config, startedAt: Date())
+
+    let page = URLNormalizer.normalize("https://base.test/docs/intro.html", relativeTo: nil)!
+    let id = try store.insertURLIfNew(page, depth: 0, isInternal: true, discoveredAt: Date())
+
+    var facts = PageFacts()
+    facts.title = "Intro"
+    facts.titleCount = 1
+    facts.baseHref = "https://base.test/manual/"
+    facts.canonical = "canonical.html"
+    facts.links = [LinkFact(href: "next.html", anchor: "Next", rel: nil, position: 0)]
+    facts.images = [ImageFact(src: "pic.png", alt: "P")]
+    facts.hreflang = [HreflangFact(lang: "fr", href: "fr.html")]
+
+    _ = try store.write(results: [CrawlResult(
+        urlID: id, url: page, depth: 0, status: 200, errorKind: nil,
+        contentType: "text/html", contentLength: 10, responseTimeMs: 1,
+        redirectTarget: nil, bodyGz: nil, xRobotsTag: nil, facts: facts
+    )], config: config, now: Date())
+
+    let urls = try await store.dbQueue.read { db in
+        try String.fetchAll(db, sql: "SELECT url FROM urls ORDER BY url")
+    }
+    #expect(urls.contains("https://base.test/manual/next.html"))
+    #expect(urls.contains("https://base.test/manual/pic.png"))
+    #expect(urls.contains("https://base.test/manual/fr.html"))
+    #expect(urls.contains("https://base.test/manual/canonical.html"))
+    #expect(!urls.contains("https://base.test/docs/next.html"), "the page's own directory is not the base")
+}

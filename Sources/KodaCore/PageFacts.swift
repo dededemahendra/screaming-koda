@@ -42,6 +42,11 @@ public struct PageFacts: Sendable {
     public var h1: String?
     public var h1Count: Int = 0
     public var h2Count: Int = 0
+    /// The document's `<base href>`, if it declared one. Relative URLs in the
+    /// page resolve against this rather than against the page's own address.
+    /// Reported rather than applied: the parser is not told where the page came
+    /// from, so it cannot resolve anything.
+    public var baseHref: String?
     public var canonical: String?
     public var canonicalCount: Int = 0
     public var metaRobots: String?

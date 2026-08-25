@@ -122,3 +122,18 @@ private let page = """
     #expect(f.title != nil)
     #expect(f.links.count == 1)
 }
+
+@Test func extractsBaseHref() throws {
+    let facts = try SwiftSoupParser().parse(html: """
+        <html><head><base href="https://cdn.test/assets/"><title>T</title></head>
+        <body><a href="page.html">P</a></body></html>
+        """)
+    #expect(facts.baseHref == "https://cdn.test/assets/")
+    // The parser has no page URL by design, so it reports the base rather than
+    // resolving against it. Resolution happens where the URL is known.
+    #expect(facts.links.first?.href == "page.html")
+
+    #expect(try SwiftSoupParser().parse(html: "<html><head></head><body></body></html>").baseHref == nil)
+    #expect(try SwiftSoupParser().parse(html: "<html><head><base target='_blank'></head></html>").baseHref == nil,
+            "a base without an href says nothing about URLs")
+}

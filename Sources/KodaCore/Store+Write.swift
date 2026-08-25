@@ -49,7 +49,14 @@ extension Store {
         _ db: Database, facts: PageFacts, result: CrawlResult, config: CrawlConfig,
         seedHost: String?, now: Date, discovered: inout Int
     ) throws {
-        let canonicalNormalized = facts.canonical.flatMap { URLNormalizer.normalize($0, relativeTo: result.url) }
+        // Every relative URL in the document resolves against <base href> when the
+        // page declares one, and against the page's own address otherwise. Getting
+        // this wrong does not fail loudly: it invents URLs that do not exist and
+        // misses the ones that do. The base itself resolves against the page.
+        let base = facts.baseHref
+            .flatMap { URLNormalizer.normalize($0, relativeTo: result.url) } ?? result.url
+
+        let canonicalNormalized = facts.canonical.flatMap { URLNormalizer.normalize($0, relativeTo: base) }
         let canonicalID = try Self.resolveCanonicalTarget(db, canonicalNormalized, parent: result,
                                                           config: config, seedHost: seedHost, now: now,
                                                           discovered: &discovered)
@@ -84,7 +91,7 @@ extension Store {
 
         try db.execute(sql: "DELETE FROM links WHERE from_url_id = ?", arguments: [result.urlID])
         for link in facts.links {
-            guard let target = URLNormalizer.normalize(link.href, relativeTo: result.url) else { continue }
+            guard let target = URLNormalizer.normalize(link.href, relativeTo: base) else { continue }
             let isInternal = Self.isInternal(target, seedHost: seedHost, config: config)
             let isNofollow = link.rel?.lowercased().contains("nofollow") == true
             let crawlable = isInternal && (!isNofollow || config.followInternalNofollow)
@@ -102,7 +109,7 @@ extension Store {
 
         try db.execute(sql: "DELETE FROM images WHERE url_id = ?", arguments: [result.urlID])
         for image in facts.images {
-            guard let src = URLNormalizer.normalize(image.src, relativeTo: result.url) else { continue }
+            guard let src = URLNormalizer.normalize(image.src, relativeTo: base) else { continue }
             let srcID = try Self.upsertURL(db, src, parentDepth: result.depth, config: config,
                                            seedHost: seedHost, now: now, enqueue: false, discovered: &discovered)
             try db.execute(sql: "INSERT INTO images (url_id, src_url_id, alt) VALUES (?,?,?)",
@@ -111,7 +118,7 @@ extension Store {
 
         try db.execute(sql: "DELETE FROM hreflang WHERE url_id = ?", arguments: [result.urlID])
         for entry in facts.hreflang {
-            guard let href = URLNormalizer.normalize(entry.href, relativeTo: result.url) else { continue }
+            guard let href = URLNormalizer.normalize(entry.href, relativeTo: base) else { continue }
             let hrefID = try Self.upsertURL(db, href, parentDepth: result.depth, config: config,
                                             seedHost: seedHost, now: now,
                                             enqueue: Self.isInternal(href, seedHost: seedHost, config: config),
