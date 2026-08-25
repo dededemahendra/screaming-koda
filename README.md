@@ -26,17 +26,35 @@ to the front.
 ## The app
 
 `ScreamingKoda.app` crawls and browses in one window: a toolbar with the seed
-URL and Start/Stop, a sidebar of reports with live counts, a results table, and
-an inspector showing the selected URL's details, inlinks, outlinks and images.
+URL, Start/Stop and crawl settings, a sidebar of reports with live counts, a
+results table, and an inspector showing the selected URL's details, inlinks,
+outlinks, images and hreflang alternates.
 
 Results can be browsed while the crawl is still running. Stop leaves the
 frontier intact, so Start becomes Resume. Opening a `.koda` file (double-click,
-or `open -a ScreamingKoda site.koda`) browses a finished crawl without crawling,
-including one the CLI produced.
+`open -a ScreamingKoda site.koda`, or Open Recent) browses a crawl without
+crawling, including one the CLI produced — and a crawl that was never finished
+opens as stopped, so Resume is offered rather than a partial site presented as
+the whole of it.
 
-Table columns sort by clicking their header and the filter box narrows across
-every column. Both re-query rather than sorting in memory, so they cost the same
-on a half-million-row crawl as on a small one.
+Everything the CLI exposes is in the settings sheet: depth and URL limits,
+include and exclude regexes, subdomains, robots.txt, workers, per-host limits,
+timeout, user agent, and what to collect. Settings persist between launches.
+Resuming replays the config the crawl started with rather than what the form
+currently says, because the frontier was already filtered by those rules.
+
+| Doing | How |
+| --- | --- |
+| Sort | Click a column header |
+| Filter | The filter box, or Cmd-F |
+| Copy rows | Select and Cmd-C, or right-click. Tab-separated, so it pastes into cells |
+| Open a URL | Double-click a row, or right-click |
+| Export this report | Cmd-Option-E. Keeps the sort and filter on screen |
+| Export a workbook | Cmd-E. One `.xlsx`, one tab per report with findings |
+| Export CSVs | Cmd-Shift-E. One file per report |
+
+Sorting and filtering re-query rather than sorting in memory, so they cost the
+same on a half-million-row crawl as on a small one.
 
 ## Usage
 
@@ -45,6 +63,7 @@ koda crawl https://example.com/     # crawl a site and print what is wrong with 
 koda report                         # list the reports that found something
 koda report titles-duplicate        # look at one
 koda export                         # write every report with findings to CSV
+koda export --format xlsx           # or as one spreadsheet, a tab per report
 koda summary                        # reprint a finished crawl without re-running it
 ```
 
@@ -83,6 +102,19 @@ id and count. `koda report <id>` prints one as a table; add `--csv` for CSV,
 `--limit` to change how many rows are shown, or `--all` when listing to include
 reports with no findings.
 
+### koda export
+
+`--format csv` (the default) writes a directory with one file per report.
+`--format xlsx` writes one workbook whose first tab is an overview of the crawl
+and whose remaining tabs are the reports that found something. `--out` sets the
+directory or the file; without it you get `koda-reports/` or
+`koda-reports.xlsx`.
+
+The workbook is written directly rather than through a library: an `.xlsx` is a
+zip of XML parts, and `ZIPArchive` plus `XLSXWriter` are smaller than the
+dependency would be. Exporting the same crawl twice produces byte-identical
+files.
+
 ## Reports
 
 Issues are queries, not rows. There is no findings table: each report is a SQL
@@ -103,6 +135,11 @@ immediately and adding one is a new entry in `ReportCatalogue.all`.
 | Hreflang | Missing return link, non-200 target, missing x-default |
 | Page Depth | Distribution, deeper than 3, single inlink |
 
+Page Depth counts pages, not URLs. Images, broken links, redirect targets and
+external URLs all sit at some depth, and on a real site they outnumber the
+pages, so those rules join `page_facts` — which only exists for HTML that was
+actually parsed — and require a 200.
+
 Reports are either inventory or issues. "4 internal URLs" is inventory and is not
 reported as a finding, because mixing the two teaches people to ignore findings.
 
@@ -119,7 +156,9 @@ and does not follow internal `nofollow` links or crawl subdomains unless asked.
 External links and images are status-checked with HEAD after the internal crawl
 finishes, so a slow third-party host can never starve the crawl of the site you
 asked about. HEAD falls back to GET when a server answers 405 or 501. Neither is
-ever parsed. Image sizes come from `Content-Length`.
+ever parsed. Image sizes come from `Content-Length`. This is a phase of its own
+in the UI and on the CLI, because it drains no frontier and a progress display
+that only knows about crawling shows it as a stall.
 
 Redirects are never followed automatically. Each hop is stored as its own row so
 chains can be reconstructed, and a chain longer than `maxRedirects` (10) is
@@ -137,6 +176,12 @@ once a crawl passes 50,000 URLs.
 ## The database
 
 A `.koda` file is an ordinary SQLite database. Query it with anything.
+
+`urls.state` is 0 queued, 1 in-flight, 2 done, 3 skipped, 4 claimed for a status
+check. The last two are separate on purpose: a skipped URL is an external link
+or an image, and recovering a crashed status check has to put it back to skipped
+rather than hand it to the frontier, or the next run would crawl third-party
+sites.
 
 ```bash
 sqlite3 example.com.koda "SELECT u.url, r.status FROM urls u JOIN responses r ON r.url_id = u.id"
@@ -160,13 +205,19 @@ swift test
 
 Most tests stub the network. `EndToEndTests` runs the real HTTP client against
 `python3 -m http.server` serving a fixture site, on a kernel-assigned port so the
-tests can run in parallel.
+tests can run in parallel. `XLSXTests` reads its own output back with
+`/usr/bin/unzip` rather than trusting the writer that produced it.
+
+Tests that prove concurrency assert on ordering, not on elapsed time. A test
+that compares a 5ms sleep against a 300ms one fails on correct code, because
+macOS coalesces short timers hard enough under the test runner that the ratio
+does not survive.
 
 ## Layout
 
 | Path | Imports | Holds |
 | --- | --- | --- |
-| `Sources/KodaCore` | Foundation, GRDB, SwiftSoup | Crawling, storage, reports |
+| `Sources/KodaCore` | Foundation, GRDB, SwiftSoup | Crawling, storage, reports, export |
 | `Sources/KodaUI` | KodaCore, Observation | Observable models for the app |
 | `Sources/KodaApp` | KodaUI, SwiftUI, AppKit | Views |
 | `Sources/koda` | KodaCore, ArgumentParser | The CLI |
