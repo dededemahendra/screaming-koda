@@ -85,7 +85,7 @@ several.
 | --- | --- | --- |
 | `--db` | `<host>.koda` | Database path |
 | `--workers` | 5 | Concurrent fetches |
-| `--limit` | 500000 | Stop after this many URLs |
+| `--limit` | 500000 | Stop queueing after this many URLs |
 | `--max-depth` | unlimited | Maximum link depth from the seed |
 | `--include` | none | Only crawl URLs matching this regex. Repeatable |
 | `--exclude` | none | Never crawl URLs matching this regex. Repeatable, wins over `--include` |
@@ -99,6 +99,10 @@ several.
 | `--no-bodies` | off | Do not store page bodies |
 | `--ignore-robots` | off | Ignore robots.txt. Only for sites you control |
 | `--resume` | off | Continue an existing database instead of starting over |
+
+`--limit` caps the frontier, not the request count. External links and the
+images of pages already crawled are still status-checked afterwards, because
+they are findings about the pages that were crawled rather than more of the site.
 
 Without `--resume` an existing database at the target path is replaced — but
 only if it is a crawl. `--db` is one typo away from an ordinary file, so a path
