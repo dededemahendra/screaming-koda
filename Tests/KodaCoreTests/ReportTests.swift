@@ -268,6 +268,39 @@ private func firstColumn(_ rows: [[String?]]) -> [String] {
     #expect(rows.first?[1] == "1", "only the seed is at depth 0")
 }
 
+@Test func pageDepthIsAboutPagesAndNothingElse() async throws {
+    // A broken link, an image and an external URL all get a response row and all
+    // sit at some depth. Counting them makes the histogram a picture of the
+    // site's assets rather than of how deep its pages are, and on a real site
+    // they outnumber the pages.
+    let store = try await crawledStore()
+    let counted = try store.runReport(ReportCatalogue.report(id: "depth-distribution")!)
+        .compactMap { Int($0[1] ?? "") }.reduce(0, +)
+    let pages = try await store.dbQueue.read { db in
+        try Int.fetchOne(db, sql: """
+            SELECT count(*) FROM page_facts f JOIN urls u ON u.id = f.url_id
+            JOIN responses r ON r.url_id = u.id
+            WHERE u.is_internal = 1 AND r.status = 200
+            """) ?? 0
+    }
+    #expect(pages > 0)
+    #expect(counted == pages, "the histogram counts pages, not assets")
+
+    for id in ["depth-over-3", "depth-single-inlink"] {
+        let urls = try store.runReport(ReportCatalogue.report(id: id)!).compactMap { $0[0] }
+        for url in urls {
+            let isPage = try await store.dbQueue.read { db in
+                try Int.fetchOne(db, sql: """
+                    SELECT count(*) FROM page_facts f JOIN responses r ON r.url_id = f.url_id
+                    JOIN urls u ON u.id = f.url_id
+                    WHERE u.url = ? AND r.status = 200 AND u.is_internal = 1
+                    """, arguments: [url]) ?? 0
+            }
+            #expect(isPage == 1, "\(id) listed \(url), which is not a page")
+        }
+    }
+}
+
 // MARK: - Inventory vs issues
 
 @Test func inventoryReportsAreNotCountedAsFindings() {

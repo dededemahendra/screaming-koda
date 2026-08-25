@@ -7,6 +7,11 @@ import Foundation
 /// Content rules are restricted to `status = 200`. A missing title on a 404 is
 /// not a finding, and letting error pages into these reports is the fastest way
 /// to make the whole set untrustworthy.
+///
+/// The Page Depth rules go further and join `page_facts`, which only exists for
+/// HTML that was parsed. A broken link, an image and a redirect all get a
+/// response row and all sit at some depth; counting them turns "how deep are the
+/// pages" into a picture of the site's assets, and on a real site the assets win.
 public enum ReportCatalogue {
     public static func report(id: String) -> ReportDefinition? {
         all.first { $0.id == id }
@@ -505,11 +510,14 @@ public enum ReportCatalogue {
             group: "Page Depth",
             name: "Distribution",
             kind: .inventory,
-            summary: "How many crawled URLs sit at each click depth from the seed.",
+            summary: "How many of the site's pages sit at each click depth from the seed.",
             columns: ["Depth", "URLs"],
             sql: """
                 SELECT u.depth AS "Depth", count(*) AS "URLs"
-                FROM urls u JOIN responses r ON r.url_id = u.id
+                FROM urls u
+                JOIN page_facts f ON f.url_id = u.id
+                JOIN responses r ON r.url_id = u.id
+                WHERE u.is_internal = 1 AND r.status = 200
                 GROUP BY u.depth
                 ORDER BY u.depth
                 """
@@ -519,11 +527,13 @@ public enum ReportCatalogue {
             group: "Page Depth",
             name: "Deeper than 3",
             summary: "Pages more than three clicks from the seed, where crawl budget thins out.",
-            columns: ["URL", "Depth", "Status"],
+            columns: ["URL", "Depth", "Title"],
             sql: """
-                SELECT u.url AS "URL", u.depth AS "Depth", r.status AS "Status"
-                FROM urls u JOIN responses r ON r.url_id = u.id
-                WHERE u.is_internal = 1 AND u.depth > 3
+                SELECT u.url AS "URL", u.depth AS "Depth", f.title AS "Title"
+                FROM urls u
+                JOIN page_facts f ON f.url_id = u.id
+                JOIN responses r ON r.url_id = u.id
+                WHERE u.is_internal = 1 AND r.status = 200 AND u.depth > 3
                 ORDER BY u.depth DESC, u.url
                 """
         ),
@@ -536,9 +546,10 @@ public enum ReportCatalogue {
             sql: """
                 SELECT u.url AS "URL", u.depth AS "Depth", count(l.from_url_id) AS "Inlinks"
                 FROM urls u
+                JOIN page_facts pf ON pf.url_id = u.id
                 JOIN responses r ON r.url_id = u.id
                 LEFT JOIN links l ON l.to_url_id = u.id AND l.is_internal = 1
-                WHERE u.is_internal = 1
+                WHERE u.is_internal = 1 AND r.status = 200
                 GROUP BY u.id
                 HAVING count(l.from_url_id) = 1
                 ORDER BY u.url
