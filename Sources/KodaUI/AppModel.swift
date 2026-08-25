@@ -18,6 +18,7 @@ public final class AppModel {
     public private(set) var inlinks: [LinkRow] = []
     public private(set) var outlinks: [LinkRow] = []
     public private(set) var selectedImages: [ImageRow] = []
+    public private(set) var selectedHreflang: [HreflangRow] = []
     public private(set) var errorMessage: String?
 
     /// Frontier counts read from the database on the refresh timer.
@@ -148,6 +149,7 @@ public final class AppModel {
             inlinks = try store.inlinks(to: id)
             outlinks = try store.outlinks(from: id)
             selectedImages = try store.images(on: id)
+            selectedHreflang = try store.hreflang(on: id)
         } catch {
             errorMessage = String(describing: error)
             clearSelection()
@@ -176,6 +178,7 @@ public final class AppModel {
         inlinks = []
         outlinks = []
         selectedImages = []
+        selectedHreflang = []
     }
 
     /// Re-reads counts and the visible table. Called on a throttled timer while a

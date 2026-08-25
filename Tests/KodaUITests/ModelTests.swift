@@ -523,3 +523,44 @@ private struct SlowExternalFixtureSite: HTTPClient {
         return await FixtureSite().fetch(url: url, method: method, userAgent: userAgent, timeout: timeout)
     }
 }
+
+@MainActor
+@Test func selectingAPageLoadsItsHreflangAlternates() async throws {
+    let path = NSTemporaryDirectory() + "koda-hreflang-\(UUID().uuidString).koda"
+    defer { try? FileManager.default.removeItem(atPath: path) }
+    _ = try await CrawlSession.start(dbPath: path, config: CrawlConfig(seedURL: "https://hl.test/"),
+                                     client: HreflangSite(), parser: SwiftSoupParser(), onProgress: nil)
+
+    let (model, cleanup) = scratchModel(client: { HreflangSite() })
+    defer { cleanup() }
+    try model.openDatabase(path: path)
+    model.select(reportID: "internal-all")
+    model.table?.toggleSort(column: 0)
+    model.selectRow(at: 0)
+
+    #expect(model.selectedDetail?.url == "https://hl.test/")
+    #expect(model.selectedHreflang.map(\.lang) == ["en", "fr", "x-default"])
+    #expect(model.selectedHreflang.allSatisfy { $0.url.hasPrefix("https://hl.test/") })
+
+    model.clearSelection()
+    #expect(model.selectedHreflang.isEmpty)
+}
+
+private struct HreflangSite: HTTPClient {
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
+        if url.hasSuffix("robots.txt") {
+            return .response(HTTPResponse(status: 404, headers: [:], body: Data(), elapsedMs: 1))
+        }
+        let body = url == "https://hl.test/"
+            ? """
+              <html><head><title>Home</title>
+              <link rel="alternate" hreflang="en" href="https://hl.test/">
+              <link rel="alternate" hreflang="fr" href="https://hl.test/fr">
+              <link rel="alternate" hreflang="x-default" href="https://hl.test/">
+              </head><body><h1>H</h1><a href="/fr">FR</a></body></html>
+              """
+            : "<html><head><title>FR</title></head><body><h1>FR</h1></body></html>"
+        return .response(HTTPResponse(status: 200, headers: ["Content-Type": "text/html"],
+                                      body: Data(body.utf8), elapsedMs: 1))
+    }
+}

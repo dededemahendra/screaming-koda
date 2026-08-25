@@ -5,6 +5,7 @@ import SwiftUI
 struct ContentView: View {
     @Bindable var model: AppModel
     @State private var isShowingSettings = false
+    @FocusState private var isFilterFocused: Bool
 
     private var controller: CrawlController { model.controller }
 
@@ -23,6 +24,11 @@ struct ContentView: View {
         .navigationTitle("Screaming Koda")
         .navigationSubtitle(subtitle)
         .sheet(isPresented: $isShowingSettings) { CrawlSettingsView(model: model) }
+        // Cmd-F is where every table's search box lives, and this one is the
+        // fastest way through a report of five thousand rows.
+        .onReceive(NotificationCenter.default.publisher(for: .kodaFocusFilter)) { _ in
+            isFilterFocused = true
+        }
         .safeAreaInset(edge: .bottom) {
             if let message = model.errorMessage {
                 ErrorBanner(message: message) { model.clearError() }
@@ -72,6 +78,7 @@ struct ContentView: View {
             TextField("Filter", text: Binding(get: { table.filter }, set: { table.setFilter($0) }))
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 200)
+                .focused($isFilterFocused)
         }
         .padding(8)
     }
@@ -176,4 +183,9 @@ struct ErrorBanner: View {
         .background(.regularMaterial)
         .overlay(alignment: .top) { Divider() }
     }
+}
+
+
+extension Notification.Name {
+    static let kodaFocusFilter = Notification.Name("co.sistercreatives.screamingkoda.focusFilter")
 }

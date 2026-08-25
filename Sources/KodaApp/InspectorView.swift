@@ -17,6 +17,9 @@ struct InspectorView: View {
                         links("Outlinks", model.outlinks)
                         links("Inlinks", model.inlinks)
                         images
+                        // Only when there are any: most sites have none, and an
+                        // empty pane on every selection is noise.
+                        if !model.selectedHreflang.isEmpty { hreflang }
                     }
                     .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -35,6 +38,12 @@ struct InspectorView: View {
                 .font(.system(.body, design: .monospaced))
                 .textSelection(.enabled)
             HStack(spacing: 8) {
+                if let url = URL(string: detail.url), url.scheme?.hasPrefix("http") == true {
+                    Link(destination: url) {
+                        Label("Open", systemImage: "arrow.up.forward.square")
+                    }
+                    .font(.caption)
+                }
                 StatusBadge(status: detail.status, errorKind: detail.errorKind)
                 Text("Depth \(detail.depth)").foregroundStyle(.secondary)
                 if !detail.isInternal {
@@ -87,6 +96,25 @@ struct InspectorView: View {
                     }
                     if rows.count > 50 {
                         Text("… and \(rows.count - 50) more").font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    private var hreflang: some View {
+        Section("Hreflang (\(model.selectedHreflang.count))") {
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(indexed(model.selectedHreflang)) { item in
+                    let alternate = item.value
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        StatusBadge(status: alternate.status, errorKind: nil)
+                        Text(alternate.lang)
+                            .font(.caption2.bold())
+                            .frame(minWidth: 46, alignment: .leading)
+                        Text(alternate.url)
+                            .font(.system(.caption2, design: .monospaced))
+                            .lineLimit(1)
                     }
                 }
             }

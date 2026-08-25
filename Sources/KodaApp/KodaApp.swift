@@ -25,6 +25,14 @@ struct KodaApp: App {
                 Button("Open Crawl…") { open() }
                     .keyboardShortcut("o")
                     .disabled(model.controller.phase.isRunning)
+                RecentCrawlsMenu(isEnabled: !model.controller.phase.isRunning, open: load(path:))
+            }
+            CommandGroup(after: .textEditing) {
+                Button("Find in Report") {
+                    NotificationCenter.default.post(name: .kodaFocusFilter, object: nil)
+                }
+                .keyboardShortcut("f")
+                .disabled(model.table == nil)
             }
             CommandGroup(after: .toolbar) {
                 Button("Export Current Report…") { exportCurrentReport() }
@@ -50,6 +58,9 @@ struct KodaApp: App {
     private func load(path: String) {
         do {
             try model.openDatabase(path: path)
+            // The system keeps this list, so it survives relaunches and shows up
+            // under the Dock icon as well as in the menu.
+            NSDocumentController.shared.noteNewRecentDocumentURL(URL(fileURLWithPath: path))
         } catch {
             present(error: "Could not open \((path as NSString).lastPathComponent): \(error)")
         }
@@ -131,5 +142,33 @@ struct KodaApp: App {
         alert.messageText = message
         alert.alertStyle = style
         alert.runModal()
+    }
+}
+
+
+/// The crawls opened recently.
+///
+/// Read at menu-build time from `NSDocumentController`, which is where macOS
+/// keeps this list for every app whether or not it uses NSDocument. Files that
+/// have since been deleted are dropped rather than offered and then failing.
+struct RecentCrawlsMenu: View {
+    let isEnabled: Bool
+    let open: (String) -> Void
+
+    var body: some View {
+        Menu("Open Recent") {
+            let recent = NSDocumentController.shared.recentDocumentURLs
+                .filter { FileManager.default.fileExists(atPath: $0.path) }
+            if recent.isEmpty {
+                Text("No Recent Crawls")
+            } else {
+                ForEach(recent, id: \.self) { url in
+                    Button(url.lastPathComponent) { open(url.path) }
+                }
+                Divider()
+                Button("Clear Menu") { NSDocumentController.shared.clearRecentDocuments(nil) }
+            }
+        }
+        .disabled(!isEnabled)
     }
 }
