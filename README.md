@@ -95,7 +95,10 @@ several.
 | `--ignore-robots` | off | Ignore robots.txt. Only for sites you control |
 | `--resume` | off | Continue an existing database instead of starting over |
 
-Without `--resume` an existing database at the target path is replaced.
+Without `--resume` an existing database at the target path is replaced — but
+only if it is a crawl. `--db` is one typo away from an ordinary file, so a path
+holding anything else is refused and left alone, by `crawl` and by the read-only
+commands alike.
 
 ### koda report
 

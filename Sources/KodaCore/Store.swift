@@ -1,6 +1,33 @@
 import Foundation
 import GRDB
 
+/// Refusing to touch a file that is not ours.
+///
+/// `--db` is one typo away from an ordinary file. Both the crawl path and the
+/// read-only commands used to write to whatever it named — a crawl deleted the
+/// file outright, and `summary` migrated eight tables into it — so every path
+/// that writes checks first.
+public enum StoreError: Error, CustomStringConvertible {
+    case notACrawl(String)
+
+    public var description: String {
+        switch self {
+        case .notACrawl(let path):
+            return "\(path) is not a Screaming Koda crawl, so it was left alone."
+        }
+    }
+}
+
+/// What is at a path, as far as this tool is concerned.
+public enum DatabaseKind: Sendable {
+    /// Nothing there, or an empty file. Free to become a crawl.
+    case absent
+    /// A crawl this tool wrote.
+    case crawl
+    /// Something else. Never written to, never removed.
+    case foreign
+}
+
 public final class Store: @unchecked Sendable {
     public let dbQueue: DatabaseQueue
 
@@ -20,14 +47,55 @@ public final class Store: @unchecked Sendable {
             try db.execute(sql: "PRAGMA synchronous=NORMAL")
         }
         if let path {
-            dbQueue = try DatabaseQueue(path: path, configuration: config)
+            do {
+                dbQueue = try DatabaseQueue(path: path, configuration: config)
+            } catch let error as DatabaseError where error.resultCode == .SQLITE_NOTADB {
+                // "SQLite error 26: file is not a database - while executing
+                // `PRAGMA journal_mode=WAL`" is a true sentence about the wrong
+                // subject. Every other failure — permissions, a full disk — is
+                // its own problem and is passed through unchanged.
+                throw StoreError.notACrawl(path)
+            }
         } else {
             dbQueue = try DatabaseQueue(configuration: config)
         }
     }
 
+    /// Creates the schema, or brings an older crawl up to date.
+    ///
+    /// Refuses a database holding tables that are not ours rather than adding
+    /// eight more to it. An empty file is fair game — that is how a new crawl
+    /// begins — and so is one that already has `crawl_meta`, which is how an
+    /// older crawl gets upgraded.
     public func migrate() throws {
+        try dbQueue.read { db in
+            let tables = try String.fetchAll(db, sql: """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'grdb_migrations'
+                """)
+            guard tables.isEmpty || tables.contains("crawl_meta") else {
+                throw StoreError.notACrawl(dbQueue.path)
+            }
+        }
         try Self.migrator.migrate(dbQueue)
+    }
+
+    /// What is at `path`, without opening it for writing or creating anything.
+    public static func kind(at path: String) -> DatabaseKind {
+        guard FileManager.default.fileExists(atPath: path) else { return .absent }
+        let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int64) ?? 0
+        if size == 0 { return .absent }
+
+        var config = Configuration()
+        config.readonly = true
+        guard let queue = try? DatabaseQueue(path: path, configuration: config),
+              let hasMeta = try? queue.read({ db in
+                  try Bool.fetchOne(db, sql: """
+                      SELECT count(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'crawl_meta'
+                      """) ?? false
+              })
+        else { return .foreign }
+        return hasMeta ? .crawl : .foreign
     }
 
     static var migrator: DatabaseMigrator {
@@ -125,7 +193,13 @@ public final class Store: @unchecked Sendable {
     /// WAL mode leaves a `-wal` and a `-shm` beside the database. Removing only
     /// the database would leave the next crawl at that path replaying a
     /// write-ahead log belonging to a crawl that no longer exists.
+    /// Deletes a crawl and its write-ahead log.
+    ///
+    /// Refuses anything that is not a crawl. Starting over replaces the database
+    /// at the target path, and "replace whatever is there" is the wrong reading
+    /// of that when the path came from a person typing `--db`.
     public static func removeDatabase(at path: String) throws {
+        guard kind(at: path) != .foreign else { throw StoreError.notACrawl(path) }
         for suffix in ["", "-wal", "-shm"] {
             let sidecar = path + suffix
             if FileManager.default.fileExists(atPath: sidecar) {

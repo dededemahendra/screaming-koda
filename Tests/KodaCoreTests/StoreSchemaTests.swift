@@ -76,3 +76,103 @@ import Testing
     // has usually just checked and does not need to check twice.
     try Store.removeDatabase(at: path)
 }
+
+// MARK: - Somebody else's file
+
+/// `--db` is one typo away from an ordinary file, and both the crawl path and
+/// the read-only commands used to write to whatever it named: a crawl deleted it
+/// outright, and `summary` migrated eight tables into it. A tool that can eat a
+/// database it did not create is a tool nobody should run in their home
+/// directory.
+
+private func temporaryPath(_ suffix: String) -> String {
+    NSTemporaryDirectory() + "koda-foreign-\(UUID().uuidString)\(suffix)"
+}
+
+private func makeForeignDatabase(at path: String) throws {
+    let queue = try DatabaseQueue(path: path)
+    try queue.write { db in
+        try db.execute(sql: "CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT)")
+        try db.execute(sql: "INSERT INTO customers (name) VALUES ('Ada')")
+    }
+}
+
+@Test func migratingSomebodyElsesDatabaseIsRefused() throws {
+    let path = temporaryPath(".sqlite")
+    defer { try? FileManager.default.removeItem(atPath: path) }
+    try makeForeignDatabase(at: path)
+
+    #expect(throws: StoreError.self) {
+        let store = try Store(path: path)
+        try store.migrate()
+    }
+
+    let tables = try DatabaseQueue(path: path).read { db in
+        try String.fetchAll(db, sql: "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+    }
+    #expect(tables == ["customers"], "the file is left exactly as it was found")
+}
+
+@Test func removingSomebodyElsesDatabaseIsRefused() throws {
+    let path = temporaryPath(".sqlite")
+    defer { try? FileManager.default.removeItem(atPath: path) }
+    try makeForeignDatabase(at: path)
+
+    #expect(throws: StoreError.self) { try Store.removeDatabase(at: path) }
+    #expect(FileManager.default.fileExists(atPath: path), "the file survives")
+}
+
+@Test func removingAFileThatIsNotADatabaseAtAllIsRefused() throws {
+    let path = temporaryPath(".koda")
+    defer { try? FileManager.default.removeItem(atPath: path) }
+    try "notes, not a crawl".write(toFile: path, atomically: true, encoding: .utf8)
+
+    #expect(throws: StoreError.self) { try Store.removeDatabase(at: path) }
+    #expect(FileManager.default.fileExists(atPath: path))
+}
+
+@Test func aFileThatIsNotADatabaseSaysSoRatherThanQuotingSQLite() throws {
+    let path = temporaryPath(".koda")
+    defer { try? FileManager.default.removeItem(atPath: path) }
+    try "notes, not a crawl".write(toFile: path, atomically: true, encoding: .utf8)
+
+    // "SQLite error 26: file is not a database - while executing `PRAGMA
+    // journal_mode=WAL`" is a true sentence about the wrong subject.
+    do {
+        let store = try Store(path: path)
+        try store.migrate()
+        Issue.record("expected opening a text file to fail")
+    } catch let error as StoreError {
+        #expect(String(describing: error).contains(path))
+        #expect(String(describing: error).lowercased().contains("crawl"))
+    }
+}
+
+@Test func aCrawlOfOurOwnIsStillMigratedAndRemoved() throws {
+    let path = temporaryPath(".koda")
+    defer { try? Store.removeDatabase(at: path) }
+
+    let store = try Store(path: path)
+    try store.migrate()
+    try store.initializeCrawl(config: CrawlConfig(seedURL: "https://ours.test/"), startedAt: Date())
+
+    // Reopening runs the migrator again, which is how an older crawl file gets
+    // upgraded. The guard must not stand in the way of that.
+    let reopened = try Store(path: path)
+    try reopened.migrate()
+    #expect(try reopened.crawlMeta()?.seedURL == "https://ours.test/")
+
+    try Store.removeDatabase(at: path)
+    #expect(!FileManager.default.fileExists(atPath: path))
+}
+
+@Test func aPathWithNothingAtItIsFreeToBecomeACrawl() throws {
+    let path = temporaryPath(".koda")
+    defer { try? Store.removeDatabase(at: path) }
+    let store = try Store(path: path)
+    try store.migrate()
+    #expect(try store.crawlMeta() == nil)
+    // Removing what is not there stays a no-op: the caller has usually just
+    // checked and should not have to check twice.
+    try Store.removeDatabase(at: temporaryPath(".koda"))
+}
