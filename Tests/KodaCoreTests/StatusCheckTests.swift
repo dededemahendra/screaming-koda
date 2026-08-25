@@ -149,3 +149,78 @@ private struct ManyExternalsSite: HTTPClient {
     #expect(observed > 0, "the external host was checked at all")
     #expect(observed <= config.maxPerHost, "20 links to one host must not arrive as 10 at once")
 }
+
+private actor CheckGate {
+    private(set) var fastDone = 0
+    private(set) var fastDoneBeforeSlow: Int?
+    private let target: Int
+    private var isOpen = false
+    private var waiter: CheckedContinuation<Void, Never>?
+
+    init(target: Int) { self.target = target }
+
+    func fastFinished() {
+        fastDone += 1
+        if fastDone >= target { open() }
+    }
+    func slowFinished() { fastDoneBeforeSlow = fastDone }
+    func open() {
+        guard !isOpen else { return }
+        isOpen = true
+        waiter?.resume()
+        waiter = nil
+    }
+    func wait() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiter = $0 }
+    }
+}
+
+/// A page linking to one external host that never answers and ten that do.
+private struct SlowExternalSite: HTTPClient {
+    let gate: CheckGate
+
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
+        func ok(_ body: String) -> FetchOutcome {
+            .response(HTTPResponse(status: 200, headers: ["Content-Type": "text/html"],
+                                   body: Data(body.utf8), elapsedMs: 1))
+        }
+        if url.hasSuffix("robots.txt") {
+            return .response(HTTPResponse(status: 404, headers: [:], body: Data(), elapsedMs: 1))
+        }
+        if url == "https://slowext.test/" {
+            let links = ["<a href='https://stall.example/x'>stall</a>"]
+                + (0..<10).map { "<a href='https://fast\($0).example/y'>f\($0)</a>" }
+            return ok("<html><head><title>T</title></head><body><h1>H</h1>\(links.joined())</body></html>")
+        }
+        if url.hasPrefix("https://stall.example/") {
+            await gate.wait()
+            await gate.slowFinished()
+            return .response(HTTPResponse(status: 200, headers: [:], body: Data(), elapsedMs: 1))
+        }
+        await gate.fastFinished()
+        return .response(HTTPResponse(status: 200, headers: [:], body: Data(), elapsedMs: 1))
+    }
+}
+
+@Test func oneDeadExternalHostDoesNotStallTheOthers() async throws {
+    // This is the phase where a hanging URL is most likely, because these are
+    // third-party hosts. A design that waited for a whole batch would leave every
+    // other worker idle behind the slowest link on the page.
+    let gate = CheckGate(target: 10)
+    var config = CrawlConfig(seedURL: "https://slowext.test/")
+    config.workers = 3
+    config.checkImages = false
+
+    let watchdog = Task {
+        try? await Task.sleep(nanoseconds: 10_000_000_000)
+        await gate.open()
+    }
+    defer { watchdog.cancel() }
+
+    _ = try await CrawlSession.start(dbPath: nil, config: config, client: SlowExternalSite(gate: gate),
+                                     parser: SwiftSoupParser(), onProgress: nil)
+
+    let before = await gate.fastDoneBeforeSlow
+    #expect(before == 10, "fast hosts must keep flowing past a dead one, got \(before ?? -1)")
+}

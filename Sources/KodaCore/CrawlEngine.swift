@@ -178,29 +178,48 @@ public actor CrawlEngine {
         // One batch here can span dozens of hosts, so the global worker count is
         // no longer also the per-host count. This is where maxPerHost starts to matter.
         let limiter = HostLimiter(limit: config.maxPerHost)
-        let batchSize = max(config.workers, 1)
+        let concurrency = max(config.workers, 1)
+        // One claim covers many workers, so results accumulate into a transaction
+        // of roughly `writeBatchSize` rows rather than one per worker-sized round.
+        let chunkSize = max(Self.writeBatchSize, concurrency)
 
         while true {
+            // Checked before claiming, so a stop never leaves a batch claimed for
+            // `resetInFlight` to recover.
+            if stopRequested { return }
             let batch = try store.claimForStatusCheck(
-                limit: batchSize, maxRedirects: config.maxRedirects,
+                limit: chunkSize, maxRedirects: config.maxRedirects,
                 external: config.checkExternalLinks, images: config.checkImages
             )
             if batch.isEmpty { break }
-            if stopRequested { return }
 
             var results: [CrawlResult] = []
             results.reserveCapacity(batch.count)
+            // The same sliding window the crawl loop uses, and it matters more
+            // here: these are third-party hosts, which is exactly where one URL
+            // sitting until the timeout is likely.
             await withTaskGroup(of: CrawlResult?.self) { group in
-                for item in batch {
+                var next = 0
+                while next < min(concurrency, batch.count) {
+                    let item = batch[next]
+                    next += 1
                     group.addTask { [config, client] in
                         await Self.statusCheck(item: item, config: config, client: client, limiter: limiter)
                     }
                 }
-                for await result in group {
+                while let result = await group.next() {
                     if let result { results.append(result) }
+                    guard next < batch.count else { continue }
+                    let item = batch[next]
+                    next += 1
+                    group.addTask { [config, client] in
+                        await Self.statusCheck(item: item, config: config, client: client, limiter: limiter)
+                    }
                 }
             }
 
+            // Anything that produced nothing goes back to skipped, which is the
+            // state it was claimed from.
             let produced = Set(results.map(\.urlID))
             for item in batch where !produced.contains(item.id) {
                 try store.markSkipped(item.id)

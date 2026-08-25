@@ -1,6 +1,20 @@
 import Foundation
 import GRDB
 
+/// The `urls.state` column. Not an enum stored in the database: the values are
+/// part of the schema and queried directly from SQL all over the store.
+public enum URLState {
+    public static let queued = 0
+    public static let inFlight = 1
+    public static let done = 2
+    /// Recorded but never to be crawled: external links, images, and anything a
+    /// depth limit, an exclude rule or the URL cap turned away.
+    public static let skipped = 3
+    /// Claimed for a status check. Distinct from `inFlight` so that recovering
+    /// from a stop or a crash returns it to `skipped` rather than to the frontier.
+    public static let checking = 4
+}
+
 public struct FrontierItem: Sendable {
     public let id: Int64
     public let url: NormalizedURL
@@ -90,11 +104,19 @@ extension Store {
     }
 
     /// Requeues URLs left in-flight by a crash or quit. Returns how many were reset.
+    ///
+    /// Each claim returns to the state it came from. A URL claimed for a status
+    /// check was skipped, not queued: it is an external link or an image, and
+    /// handing it to the frontier as queued would have the next run GET and parse
+    /// a third-party page and follow its links. The crawl would leave the site.
     @discardableResult
     public func resetInFlight() throws -> Int {
         try dbQueue.write { db in
-            try db.execute(sql: "UPDATE urls SET state = 0 WHERE state = 1")
-            return db.changesCount
+            try db.execute(sql: "UPDATE urls SET state = 0 WHERE state = \(URLState.inFlight)")
+            var reset = db.changesCount
+            try db.execute(sql: "UPDATE urls SET state = 3 WHERE state = \(URLState.checking)")
+            reset += db.changesCount
+            return reset
         }
     }
 
@@ -109,7 +131,7 @@ extension Store {
                 try Int.fetchOne(db, sql: "SELECT count(*) FROM urls WHERE state = ?", arguments: [state]) ?? 0
             }
             let total = try Int.fetchOne(db, sql: "SELECT count(*) FROM urls") ?? 0
-            return (try count(0), try count(1), try count(2), total)
+            return (try count(0), try count(URLState.inFlight) + count(URLState.checking), try count(2), total)
         }
     }
 }
@@ -142,7 +164,7 @@ extension Store {
             guard !rows.isEmpty else { return [] }
             let ids = rows.map { $0["id"] as Int64 }
             let placeholders = Array(repeating: "?", count: ids.count).joined(separator: ",")
-            try db.execute(sql: "UPDATE urls SET state = 1 WHERE id IN (\(placeholders))",
+            try db.execute(sql: "UPDATE urls SET state = \(URLState.checking) WHERE id IN (\(placeholders))",
                            arguments: StatementArguments(ids))
 
             var items: [FrontierItem] = []

@@ -147,3 +147,64 @@ private actor EngineBox {
     #expect(reopened.isFinished == false)
     #expect(reopened.startedAt == finished.startedAt, "the crawl still started when it started")
 }
+
+/// A site whose one external link is slow to answer, so a stop can land while
+/// the status-check phase has it claimed.
+private struct ExternalSite: HTTPClient {
+    let onExternal: @Sendable () async -> Void
+
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
+        if url.hasSuffix("robots.txt") {
+            return .response(HTTPResponse(status: 404, headers: [:], body: Data(), elapsedMs: 1))
+        }
+        if url.hasPrefix("https://away.test/") {
+            await onExternal()
+            return .response(HTTPResponse(status: 200, headers: ["Content-Type": "text/html"],
+                                          body: Data("<html><body><a href='/deep'>Deep</a></body></html>".utf8),
+                                          elapsedMs: 1))
+        }
+        let links = (0..<6).map { "<a href='https://away.test/e\($0)'>e\($0)</a>" }.joined()
+        return .response(HTTPResponse(status: 200, headers: ["Content-Type": "text/html"],
+                                      body: Data("<html><head><title>H</title></head><body><h1>H</h1>\(links)</body></html>".utf8),
+                                      elapsedMs: 1))
+    }
+}
+
+@Test func stoppingDuringTheStatusCheckDoesNotTurnExternalURLsIntoCrawlTargets() async throws {
+    // External URLs are recorded as skipped and only ever HEAD-checked. If a stop
+    // handed them back to the frontier as queued, resuming would GET and parse
+    // third-party pages and follow their links — the crawl would leave the site.
+    let store = try Store(path: nil)
+    try store.migrate()
+    var config = CrawlConfig(seedURL: "https://ext.test/")
+    config.workers = 2
+    config.checkImages = false
+    try store.initializeCrawl(config: config, startedAt: Date())
+    _ = try store.insertURLIfNew(URLNormalizer.normalize(config.seedURL, relativeTo: nil)!,
+                                 depth: 0, isInternal: true, discoveredAt: Date())
+
+    let box = EngineBox()
+    let engine = CrawlEngine(
+        store: store,
+        client: ExternalSite(onExternal: { await box.engine?.requestStop() }),
+        parser: SwiftSoupParser(), config: config
+    )
+    await box.set(engine)
+    _ = try await engine.run(onProgress: nil)
+
+    let queuedExternal = try await store.dbQueue.read { db in
+        try Int.fetchOne(db, sql: "SELECT count(*) FROM urls WHERE is_internal = 0 AND state = 0") ?? 0
+    }
+    #expect(queuedExternal == 0, "a stopped status check must not queue external URLs for crawling")
+
+    // And resuming must not fetch one as a page.
+    let resumed = CrawlEngine(store: store, client: ExternalSite(onExternal: {}),
+                              parser: SwiftSoupParser(), config: config)
+    _ = try await resumed.run(onProgress: nil)
+    let externalWithFacts = try await store.dbQueue.read { db in
+        try Int.fetchOne(db, sql: """
+            SELECT count(*) FROM page_facts f JOIN urls u ON u.id = f.url_id WHERE u.is_internal = 0
+            """) ?? 0
+    }
+    #expect(externalWithFacts == 0, "an external page is status-checked, never parsed")
+}
