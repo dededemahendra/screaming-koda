@@ -26,9 +26,11 @@ public struct CrawlConfig: Codable, Sendable {
     }
 
     /// Host of the seed URL; used to decide internal vs external.
-    public var seedHost: String? {
-        URLNormalizer.normalize(seedURL, relativeTo: nil)?.host
-    }
+    public var seedHost: String? { URLNormalizer.seed(seedURL)?.host }
+
+    /// The seed as it will actually be crawled, with a scheme supplied when the
+    /// person who typed it left one out.
+    public var normalizedSeedURL: String? { URLNormalizer.seed(seedURL)?.absoluteString }
 }
 
 /// What `crawl_meta` records about the run itself, as opposed to its settings.

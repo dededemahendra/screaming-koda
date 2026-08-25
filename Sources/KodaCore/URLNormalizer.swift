@@ -77,6 +77,42 @@ public enum URLNormalizer {
             query: components.query
         )
     }
+
+    /// Normalizes a URL a person typed, supplying a scheme when they left one out.
+    ///
+    /// Separate from `normalize` on purpose. In a page, `example.com` is a
+    /// relative path and guessing that it means a host would invent URLs that are
+    /// not on the site. In the URL field it is obviously a host, and refusing it
+    /// is the kind of pedantry that makes a tool annoying to start.
+    ///
+    /// Missing schemes become https, except on loopback, where nothing is served
+    /// over TLS and this is a tool people point at their own dev server. Any
+    /// other scheme is refused rather than rewritten: `https://` in front of
+    /// `mailto:a@b.com` parses as userinfo and would crawl a host nobody named.
+    public static func seed(_ raw: String) -> NormalizedURL? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if trimmed.hasPrefix("//") {
+            return normalize("https:" + trimmed, relativeTo: nil)
+        }
+        // A colon after a word is a scheme; a colon before digits is a port.
+        if trimmed.range(of: #"^[A-Za-z][A-Za-z0-9+.\-]*:(?![0-9])"#, options: .regularExpression) != nil {
+            return normalize(trimmed, relativeTo: nil)
+        }
+        let scheme = isLoopback(trimmed) ? "http" : "https"
+        return normalize("\(scheme)://" + trimmed, relativeTo: nil)
+    }
+
+    private static func isLoopback(_ hostAndRest: String) -> Bool {
+        let host = hostAndRest.prefix { $0 != "/" && $0 != "?" && $0 != "#" }
+        let name = host.hasPrefix("[")
+            ? String(host.dropFirst().prefix { $0 != "]" })
+            : String(host.prefix { $0 != ":" })
+        let lowered = name.lowercased()
+        return lowered == "localhost" || lowered.hasSuffix(".localhost")
+            || lowered == "::1" || lowered.hasPrefix("127.")
+    }
 }
 
 /// RFC 3986 §5.2.4 remove_dot_segments, applied to a percent-encoded path.

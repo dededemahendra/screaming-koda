@@ -164,6 +164,12 @@ from running out of memory.
 
 Relative URLs resolve against `<base href>` when a page declares one.
 
+A seed URL without a scheme gets one: `koda crawl example.com` crawls
+`https://example.com/`, and a loopback host gets `http`, because nothing serves
+TLS on a bare `localhost:3000`. Links inside a page never get this treatment —
+there, `example.com` is a relative path, and guessing otherwise would invent
+URLs that are not on the site.
+
 Pages are decoded with the encoding they declare, in the order the HTML standard
 gives: a byte order mark, then the `Content-Type` charset, then a `<meta charset>`
 in the first 4 KB, then a guess. A page labelled `iso-8859-1` is read as

@@ -144,7 +144,7 @@ public final class AppModel {
     /// Where a new crawl of `seed` goes by default: named after the host, beside
     /// the ones the CLI writes, so the two halves of the tool open each other's files.
     public static func defaultDatabasePath(for seed: String, in directory: URL? = nil) -> String? {
-        guard let host = URLNormalizer.normalize(seed, relativeTo: nil)?.host else { return nil }
+        guard let host = URLNormalizer.seed(seed)?.host else { return nil }
         let base = directory
             ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
@@ -152,8 +152,7 @@ public final class AppModel {
     }
 
     private static func sameURL(_ a: String, _ b: String) -> Bool {
-        guard let left = URLNormalizer.normalize(a, relativeTo: nil),
-              let right = URLNormalizer.normalize(b, relativeTo: nil) else { return false }
+        guard let left = URLNormalizer.seed(a), let right = URLNormalizer.seed(b) else { return false }
         return left.absoluteString == right.absoluteString
     }
 

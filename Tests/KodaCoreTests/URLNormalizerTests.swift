@@ -96,3 +96,57 @@ private func norm(_ s: String, base: String? = nil) -> NormalizedURL? {
 @Test func emptyQueryIsTreatedAsAbsent() {
     #expect(norm("http://example.com/a?")?.absoluteString == norm("http://example.com/a")?.absoluteString)
 }
+
+// MARK: - Seeds
+
+/// A seed is typed by a person, not found in an href, so it gets a scheme it did
+/// not ask for. Link resolution deliberately does not: `example.com` inside a
+/// page is a relative path, and treating it as a host would invent URLs.
+
+@Test func aBareHostIsAssumedToBeHTTPS() {
+    #expect(URLNormalizer.seed("example.com")?.absoluteString == "https://example.com/")
+    #expect(URLNormalizer.seed("example.com/blog")?.absoluteString == "https://example.com/blog")
+    #expect(URLNormalizer.seed("example.com?q=1")?.absoluteString == "https://example.com/?q=1")
+}
+
+@Test func aSeedThatAlreadyHasASchemeKeepsIt() {
+    #expect(URLNormalizer.seed("http://example.com")?.absoluteString == "http://example.com/")
+    #expect(URLNormalizer.seed("HTTPS://Example.com/A")?.absoluteString == "https://example.com/A")
+}
+
+@Test func aProtocolRelativeSeedGetsHTTPS() {
+    #expect(URLNormalizer.seed("//example.com/x")?.absoluteString == "https://example.com/x")
+}
+
+@Test func aSeedIsTrimmedBeforeAnythingElse() {
+    #expect(URLNormalizer.seed("  example.com  ")?.absoluteString == "https://example.com/")
+    #expect(URLNormalizer.seed("   ") == nil)
+    #expect(URLNormalizer.seed("") == nil)
+}
+
+/// A port after the colon is a port. A word after it is a scheme, and every
+/// scheme that is not http(s) is refused rather than quietly rewritten — a
+/// `mailto:` seed prefixed with https:// parses as userinfo and would crawl a
+/// host nobody named.
+@Test func aHostWithAPortIsNotMistakenForAScheme() {
+    #expect(URLNormalizer.seed("localhost:8080/x")?.absoluteString == "http://localhost:8080/x")
+    #expect(URLNormalizer.seed("127.0.0.1:8931")?.absoluteString == "http://127.0.0.1:8931/")
+    #expect(URLNormalizer.seed("example.com:8443")?.absoluteString == "https://example.com:8443/")
+}
+
+@Test func aSeedInAnotherSchemeIsRefusedRatherThanRewritten() {
+    #expect(URLNormalizer.seed("mailto:someone@example.com") == nil)
+    #expect(URLNormalizer.seed("ftp://example.com") == nil)
+    #expect(URLNormalizer.seed("javascript:void(0)") == nil)
+    #expect(URLNormalizer.seed("file:///Users/x/site") == nil)
+}
+
+/// Nothing serves https on a bare loopback address, and this is a tool people
+/// point at their own dev server.
+@Test func loopbackWithoutASchemeIsHTTP() {
+    #expect(URLNormalizer.seed("localhost")?.absoluteString == "http://localhost/")
+    #expect(URLNormalizer.seed("127.0.0.1/a")?.absoluteString == "http://127.0.0.1/a")
+    #expect(URLNormalizer.seed("[::1]:8080")?.absoluteString == "http://[::1]:8080/")
+    #expect(URLNormalizer.seed("https://localhost")?.absoluteString == "https://localhost/",
+            "an explicit scheme is still obeyed")
+}

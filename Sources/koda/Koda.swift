@@ -92,9 +92,13 @@ struct Crawl: AsyncParsableCommand {
             }
         }
 
-        guard let host = config.seedHost else {
+        guard let host = config.seedHost, let seed = config.normalizedSeedURL else {
             throw ValidationError("Not a crawlable http(s) URL: \(url)")
         }
+        // Recorded and printed in the form it will be fetched in, so a seed typed
+        // without a scheme does not leave crawl_meta disagreeing with the crawl.
+        config.seedURL = seed
+
         let path = db ?? FileManager.default.currentDirectoryPath + "/\(host).koda"
         let existed = FileManager.default.fileExists(atPath: path)
         if existed && !resume {
@@ -104,9 +108,9 @@ struct Crawl: AsyncParsableCommand {
         // Resuming is safe because the frontier lives in SQLite: URLs already done
         // are never reclaimed, and anything a crash left in-flight is requeued.
         if resume && existed {
-            print("Resuming \(url) → \(path)")
+            print("Resuming \(seed) → \(path)")
         } else {
-            print("Crawling \(url) → \(path)")
+            print("Crawling \(seed) → \(path)")
         }
         if ignoreRobots { print("WARNING: ignoring robots.txt") }
 

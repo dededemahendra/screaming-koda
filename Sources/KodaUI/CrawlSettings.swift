@@ -67,7 +67,7 @@ public struct CrawlSettings: Codable, Equatable, Sendable {
         let seed = seedURL.trimmingCharacters(in: .whitespacesAndNewlines)
         if seed.isEmpty {
             problems.append("Enter a URL to crawl.")
-        } else if URLNormalizer.normalize(seed, relativeTo: nil) == nil {
+        } else if URLNormalizer.seed(seed) == nil {
             problems.append("Not a crawlable http(s) URL: \(seed)")
         }
         if !maxDepthText.trimmingCharacters(in: .whitespaces).isEmpty, maxDepth == nil {
@@ -96,7 +96,10 @@ public struct CrawlSettings: Codable, Equatable, Sendable {
         let problems = problems(seedURL: seedURL)
         if let first = problems.first { throw CrawlSettingsError.invalid(problems, first: first) }
 
+        // Stored in the form it will be crawled in, so crawl_meta, the database
+        // name and a later resume all agree with what was actually fetched.
         var config = CrawlConfig(seedURL: seedURL.trimmingCharacters(in: .whitespacesAndNewlines))
+        config.seedURL = config.normalizedSeedURL ?? config.seedURL
         config.workers = max(1, workers)
         config.maxPerHost = max(1, maxPerHost)
         config.timeout = max(1, timeout)

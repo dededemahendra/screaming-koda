@@ -42,7 +42,7 @@ public enum CrawlSession {
         client: any HTTPClient,
         parser: any PageParser
     ) async throws -> (store: Store, engine: CrawlEngine) {
-        guard let seed = URLNormalizer.normalize(config.seedURL, relativeTo: nil) else {
+        guard let seed = URLNormalizer.seed(config.seedURL) else {
             throw CrawlSessionError.invalidSeedURL(config.seedURL)
         }
         let store = try Store(path: dbPath)
