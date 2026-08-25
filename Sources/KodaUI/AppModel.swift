@@ -114,7 +114,7 @@ public final class AppModel {
             do {
                 let config = try settings.config(seedURL: seedURL)
                 if FileManager.default.fileExists(atPath: path) {
-                    try replaceDatabase(at: path)
+                    try Store.removeDatabase(at: path)
                 }
                 settings.save(to: defaults)
                 reset()
@@ -124,18 +124,6 @@ public final class AppModel {
             } catch {
                 errorMessage = String(describing: error)
                 return false
-            }
-        }
-    }
-
-    /// SQLite in WAL mode leaves a `-wal` and a `-shm` beside the database.
-    /// Removing only the database would have the next crawl replay a journal
-    /// belonging to a crawl that no longer exists.
-    private func replaceDatabase(at path: String) throws {
-        for suffix in ["", "-wal", "-shm"] {
-            let sidecar = path + suffix
-            if FileManager.default.fileExists(atPath: sidecar) {
-                try FileManager.default.removeItem(atPath: sidecar)
             }
         }
     }

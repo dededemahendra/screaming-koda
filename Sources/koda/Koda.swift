@@ -98,7 +98,7 @@ struct Crawl: AsyncParsableCommand {
         let path = db ?? FileManager.default.currentDirectoryPath + "/\(host).koda"
         let existed = FileManager.default.fileExists(atPath: path)
         if existed && !resume {
-            try FileManager.default.removeItem(atPath: path)
+            try Store.removeDatabase(at: path)
         }
 
         // Resuming is safe because the frontier lives in SQLite: URLs already done

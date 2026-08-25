@@ -120,6 +120,20 @@ public final class Store: @unchecked Sendable {
         return m
     }
 
+    /// Deletes a crawl, sidecars included.
+    ///
+    /// WAL mode leaves a `-wal` and a `-shm` beside the database. Removing only
+    /// the database would leave the next crawl at that path replaying a
+    /// write-ahead log belonging to a crawl that no longer exists.
+    public static func removeDatabase(at path: String) throws {
+        for suffix in ["", "-wal", "-shm"] {
+            let sidecar = path + suffix
+            if FileManager.default.fileExists(atPath: sidecar) {
+                try FileManager.default.removeItem(atPath: sidecar)
+            }
+        }
+    }
+
     public func initializeCrawl(config: CrawlConfig, startedAt: Date) throws {
         let json = String(data: try JSONEncoder().encode(config), encoding: .utf8) ?? "{}"
         try dbQueue.write { db in

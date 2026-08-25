@@ -56,3 +56,23 @@ import Testing
         #expect(threw, "duplicate url_hash must be rejected")
     }
 }
+
+@Test func removingADatabaseTakesItsWriteAheadLogWithIt() async throws {
+    let path = NSTemporaryDirectory() + "koda-remove-\(UUID().uuidString).koda"
+    defer { for s in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: path + s) } }
+
+    let store = try Store(path: path)
+    try store.migrate()
+    try store.initializeCrawl(config: CrawlConfig(seedURL: "https://rm.test/"), startedAt: Date())
+    _ = try store.insertURLIfNew(URLNormalizer.normalize("https://rm.test/", relativeTo: nil)!,
+                                 depth: 0, isInternal: true, discoveredAt: Date())
+    #expect(FileManager.default.fileExists(atPath: path))
+
+    try Store.removeDatabase(at: path)
+    for suffix in ["", "-wal", "-shm"] {
+        #expect(!FileManager.default.fileExists(atPath: path + suffix), "\(suffix) survived")
+    }
+    // And removing one that is not there is not an error, because the caller
+    // has usually just checked and does not need to check twice.
+    try Store.removeDatabase(at: path)
+}
