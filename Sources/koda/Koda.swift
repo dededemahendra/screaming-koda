@@ -115,18 +115,14 @@ struct Crawl: AsyncParsableCommand {
             dbPath: path, config: config,
             client: URLSessionHTTPClient(), parser: SwiftSoupParser(),
             onProgress: { progress in
-                // Padded so a shorter update fully overwrites a longer one; \r alone
-                // leaves the tail of the previous line on screen.
                 let text = progress.stage == .checking
                     ? "checking links and images  \(progress.checked) checked"
                     : "crawled \(progress.crawled)  queued \(progress.queued)  found \(progress.discovered)"
-                FileHandle.standardError.write(
-                    Data("\r\(text.padding(toLength: max(text.count, 60), withPad: " ", startingAt: 0))".utf8)
-                )
+                FileHandle.standardError.write(Data(Progress.line(text).utf8))
             }
         )
         let elapsed = Date().timeIntervalSince(started)
-        FileHandle.standardError.write(Data("\r\(String(repeating: " ", count: 60))\r".utf8))
+        Progress.clear()
         print()
         Self.printSummary(try store.summary(), elapsed: elapsed)
         Self.printFindings(try store.reportCounts())
