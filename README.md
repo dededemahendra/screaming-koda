@@ -64,11 +64,13 @@ koda report                         # list the reports that found something
 koda report titles-duplicate        # look at one
 koda export                         # write every report with findings to CSV
 koda export --format xlsx           # or as one spreadsheet, a tab per report
-koda summary                        # reprint a finished crawl without re-running it
+koda summary                        # reprint a stored crawl without re-running it
 ```
 
 A crawl writes `example.com.koda` to the working directory and prints a summary
-followed by a findings list. `report`, `export` and `summary` default to the only
+followed by a findings list. `koda summary` says whether the crawl it is reading
+ran to the end, because every count in it is a floor rather than a total if it
+did not. `report`, `export` and `summary` default to the only
 `.koda` file in the working directory, so `--db` is only needed when there are
 several.
 

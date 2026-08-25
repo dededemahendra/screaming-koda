@@ -423,6 +423,7 @@ private struct SlowFixtureSite: HTTPClient {
     #expect(!model.canResume)
     #expect(model.meta?.isFinished == true)
     #expect((model.meta?.duration ?? -1) >= 0)
+    #expect(model.meta?.duration != nil, "a finished crawl knows how long it took")
 }
 
 // MARK: - Copying a selection

@@ -48,8 +48,13 @@ public struct CrawlMeta: Sendable, Equatable {
 
     public var isFinished: Bool { finishedAt != nil }
 
-    /// How long the crawl took, or has been going.
-    public var duration: TimeInterval {
-        (finishedAt ?? Date()).timeIntervalSince(startedAt)
+    /// How long the crawl took, or nil if it never finished.
+    ///
+    /// Not measured against the clock when `finishedAt` is missing: a crawl
+    /// stopped last week did not take a week, and the database has no record of
+    /// when it actually stopped. A running crawl's elapsed time comes from
+    /// whatever is running it, which is the only thing that knows.
+    public var duration: TimeInterval? {
+        finishedAt.map { $0.timeIntervalSince(startedAt) }
     }
 }

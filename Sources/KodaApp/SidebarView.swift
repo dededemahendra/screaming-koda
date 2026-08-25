@@ -29,7 +29,12 @@ struct SidebarView: View {
                         }
                         .font(.caption)
                         .selectionDisabled()
-                        .help("Took \(Duration.seconds(meta.duration).formatted(.units(allowed: [.hours, .minutes, .seconds])))")
+                        // Only a finished crawl knows how long it took. A stopped
+                        // one has no end time, and timing it against the clock
+                        // would say a crawl abandoned last week took a week.
+                        .help(meta.duration.map {
+                            "Took \(Duration.seconds($0).formatted(.units(allowed: [.hours, .minutes, .seconds])))"
+                        } ?? "Stopped before it finished")
                     }
                 }
             }

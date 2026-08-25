@@ -148,6 +148,20 @@ private actor EngineBox {
     #expect(reopened.startedAt == finished.startedAt, "the crawl still started when it started")
 }
 
+@Test func anUnfinishedCrawlHasNoDurationRatherThanAGrowingOne() {
+    let started = Date(timeIntervalSince1970: 1_700_000_000)
+
+    let done = CrawlMeta(seedURL: "https://x.test/", startedAt: started,
+                         finishedAt: started.addingTimeInterval(42))
+    #expect(done.duration == 42)
+
+    // The database records when a crawl started and when it finished, and
+    // nothing else. Measuring an unfinished crawl against the clock says a run
+    // that was stopped last week took a week, which is a number about the
+    // calendar rather than the crawl.
+    #expect(CrawlMeta(seedURL: "https://x.test/", startedAt: started, finishedAt: nil).duration == nil)
+}
+
 /// A site whose one external link is slow to answer, so a stop can land while
 /// the status-check phase has it claimed.
 private struct ExternalSite: HTTPClient {
