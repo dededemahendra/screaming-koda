@@ -306,15 +306,44 @@ private func peakConcurrency(robots: RobotsRules) async throws -> Int {
     #expect(paths == ["/", "/about"])
 }
 
+/// Counts fast pages, and holds the slow one until they have all been served.
+///
+/// The gate is the point: a timing-based version of this test compares a 5ms
+/// sleep against a 300ms one, and macOS coalesces short timers hard enough
+/// under the test runner that the ratio does not survive. Ordering does.
 private actor SlowPageProbe {
     private(set) var fastDone = 0
     private(set) var fastDoneBeforeSlow: Int?
 
-    func fastFinished() { fastDone += 1 }
+    private let target: Int
+    private var isOpen = false
+    private var waiter: CheckedContinuation<Void, Never>?
+
+    init(target: Int) { self.target = target }
+
+    func fastFinished() {
+        fastDone += 1
+        if fastDone >= target { open() }
+    }
+
     func slowFinished() { fastDoneBeforeSlow = fastDone }
+
+    /// Lets the slow page through regardless of how many fast ones have landed,
+    /// so a design that starves the workers fails the test rather than hanging it.
+    func open() {
+        guard !isOpen else { return }
+        isOpen = true
+        waiter?.resume()
+        waiter = nil
+    }
+
+    func waitForFastPages() async {
+        guard !isOpen else { return }
+        await withCheckedContinuation { waiter = $0 }
+    }
 }
 
-/// One page that sits for a long time, and ten that answer immediately.
+/// One page that waits for every other page, and ten that answer immediately.
 private struct StallingSite: HTTPClient {
     let probe: SlowPageProbe
 
@@ -332,11 +361,10 @@ private struct StallingSite: HTTPClient {
             return page("<html><head><title>T</title></head><body><h1>H</h1>\(links.joined())</body></html>")
         }
         if url == "https://stall.test/slow" {
-            try? await Task.sleep(nanoseconds: 300_000_000)
+            await probe.waitForFastPages()
             await probe.slowFinished()
             return page("<html><head><title>Slow</title></head><body><h1>S</h1></body></html>")
         }
-        try? await Task.sleep(nanoseconds: 5_000_000)
         await probe.fastFinished()
         return page("<html><head><title>Fast</title></head><body><h1>F</h1></body></html>")
     }
@@ -345,14 +373,21 @@ private struct StallingSite: HTTPClient {
 @Test func oneSlowURLDoesNotStallTheOtherWorkers() async throws {
     // The frontier claims /slow first, so a design that waits for a whole round
     // to finish before starting the next would leave workers idle behind it.
-    let probe = SlowPageProbe()
+    let probe = SlowPageProbe(target: 10)
     var config = CrawlConfig(seedURL: "https://stall.test/")
     config.workers = 3
+
+    // Bounded, so a regression reports "4 of 10" instead of wedging the suite.
+    let watchdog = Task {
+        try? await Task.sleep(nanoseconds: 10_000_000_000)
+        await probe.open()
+    }
+    defer { watchdog.cancel() }
 
     _ = try await CrawlSession.start(dbPath: nil, config: config, client: StallingSite(probe: probe),
                                      parser: SwiftSoupParser(), onProgress: nil)
 
     let before = await probe.fastDoneBeforeSlow
     #expect(before != nil, "the slow page was crawled")
-    #expect((before ?? 0) >= 8, "fast pages must keep flowing while one URL hangs, got \(before ?? -1)")
+    #expect(before == 10, "fast pages must keep flowing while one URL hangs, got \(before ?? -1)")
 }
