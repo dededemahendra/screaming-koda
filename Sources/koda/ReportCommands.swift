@@ -35,7 +35,12 @@ struct Report: AsyncParsableCommand {
         }
 
         if csv {
-            print(try store.csv(for: definition), terminator: "")
+            // Streamed rather than built into one String: --csv is the "give me
+            // everything" switch, and everything on a large crawl is every URL
+            // on the site.
+            try store.streamCSV(for: definition) { chunk in
+                FileHandle.standardOutput.write(chunk)
+            }
             return
         }
 

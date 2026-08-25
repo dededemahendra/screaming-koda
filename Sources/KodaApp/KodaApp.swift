@@ -88,7 +88,7 @@ struct KodaApp: App {
         panel.prompt = "Export"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            try Data(try store.csv(for: table.query).utf8).write(to: url, options: .atomic)
+            try store.writeCSV(for: table.query, to: url.path)
             reveal(url)
         } catch {
             present(error: "Export failed: \(error)")

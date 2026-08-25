@@ -102,3 +102,81 @@ private struct GoldenSite: HTTPClient {
     let inMemory = try store.csv(for: ReportCatalogue.report(id: "titles-duplicate")!)
     #expect(onDisk == inMemory)
 }
+
+// MARK: - Streaming
+
+/// A crawl big enough that one report spans several chunks.
+private func streamingFixture() async throws -> Store {
+    var config = CrawlConfig(seedURL: "https://csv.test/")
+    config.checkExternalLinks = false
+    config.checkImages = false
+    return try await CrawlSession.start(dbPath: nil, config: config, client: WideCSVSite(),
+                                        parser: SwiftSoupParser(), onProgress: nil)
+}
+
+private struct WideCSVSite: HTTPClient {
+    static let pageCount = 60
+
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
+        let body: String
+        if url == "https://csv.test/" {
+            body = (0..<Self.pageCount).map { "<a href='/p\($0)'>Page \($0)</a>" }.joined()
+        } else {
+            body = "<p>A page with a reasonable amount of text on it, as pages have.</p>"
+        }
+        return .response(HTTPResponse(
+            status: 200, headers: ["Content-Type": "text/html"],
+            body: Data("<html><head><title>A title long enough to be ordinary</title></head><body>\(body)</body></html>".utf8),
+            elapsedMs: 1))
+    }
+}
+
+@Test func streamingAReportGivesExactlyWhatRenderingItGives() async throws {
+    let store = try await streamingFixture()
+    let definition = ReportCatalogue.report(id: "internal-all")!
+
+    var streamed = Data()
+    let rows = try store.streamCSV(for: definition) { streamed.append($0) }
+
+    let rendered = try store.csv(for: definition)
+    let expectedRows = try store.reportCount(definition)
+    #expect(String(decoding: streamed, as: UTF8.self) == rendered)
+    #expect(rows == expectedRows)
+}
+
+@Test func streamingHandsOverTheReportInPiecesRatherThanAllAtOnce() async throws {
+    let store = try await streamingFixture()
+    var chunks = 0
+    var largest = 0
+    let rows = try store.streamCSV(for: ReportCatalogue.report(id: "internal-all")!,
+                                   chunkBytes: 1024) { chunk in
+        chunks += 1
+        largest = max(largest, chunk.count)
+    }
+    #expect(rows > WideCSVSite.pageCount)
+    #expect(chunks > 1, "a report this size must not arrive as one buffer")
+    // The whole point is that peak memory is a chunk, not a report. The handoff
+    // happens as soon as the buffer passes the threshold, so a chunk overshoots
+    // by at most one row.
+    #expect(largest < 1024 * 2)
+}
+
+@Test func aFailedExportLeavesThePreviousOneAlone() async throws {
+    let store = try await streamingFixture()
+    let path = NSTemporaryDirectory() + "koda-csv-\(UUID().uuidString).csv"
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    try "the export from yesterday".write(toFile: path, atomically: true, encoding: .utf8)
+    // A report whose SQL cannot run, to make the write fail part way.
+    let broken = ReportDefinition(id: "broken", group: "X", name: "Broken", summary: "",
+                                  columns: ["URL"], sql: "SELECT nope FROM nowhere")
+    #expect(throws: (any Error).self) { try store.writeCSV(for: broken, to: path) }
+    let survived = try String(contentsOfFile: path, encoding: .utf8)
+    #expect(survived == "the export from yesterday")
+
+    // And no debris beside it.
+    let directory = (path as NSString).deletingLastPathComponent
+    let leftovers = try FileManager.default.contentsOfDirectory(atPath: directory)
+        .filter { $0.hasSuffix(".partial") }
+    #expect(leftovers.isEmpty)
+}

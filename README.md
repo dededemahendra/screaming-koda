@@ -125,6 +125,14 @@ zip of XML parts, and `ZIPArchive` plus `XLSXWriter` are smaller than the
 dependency would be. Exporting the same crawl twice produces byte-identical
 files.
 
+CSV is written a chunk at a time straight to the file, so exporting costs the
+same memory whether the report has fifty rows or half a million. The workbook
+does not: a zip entry needs its own length before it can be written, so the
+whole thing is assembled in memory. Exporting a 20,000 URL crawl peaks at about
+90 MB that way against 25 MB for CSV, and the gap grows with the crawl. On a very
+large crawl, export CSV — which is also the format a spreadsheet will still open
+past a million rows.
+
 ## Reports
 
 Issues are queries, not rows. There is no findings table: each report is a SQL
