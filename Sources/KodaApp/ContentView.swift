@@ -6,6 +6,7 @@ struct ContentView: View {
     @Bindable var model: AppModel
     @State private var isShowingSettings = false
     @FocusState private var isFilterFocused: Bool
+    @State private var replacing: String?
 
     private var controller: CrawlController { model.controller }
 
@@ -24,6 +25,20 @@ struct ContentView: View {
         .navigationTitle("Screaming Koda")
         .navigationSubtitle(subtitle)
         .sheet(isPresented: $isShowingSettings) { CrawlSettingsView(model: model) }
+        .confirmationDialog(
+            "Replace \(replacing.map { ($0 as NSString).lastPathComponent } ?? "the existing crawl")?",
+            isPresented: Binding(get: { replacing != nil }, set: { if !$0 { replacing = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Replace", role: .destructive) {
+                let path = replacing
+                replacing = nil
+                model.startCrawl(databasePath: path)
+            }
+            Button("Cancel", role: .cancel) { replacing = nil }
+        } message: {
+            Text("Starting over discards that crawl. To continue it instead, open it first.")
+        }
         // Cmd-F is where every table's search box lives, and this one is the
         // fastest way through a report of five thousand rows.
         .onReceive(NotificationCenter.default.publisher(for: .kodaFocusFilter)) { _ in
@@ -113,6 +128,12 @@ struct ContentView: View {
     }
 
     private func start() {
+        // Starting over destroys a file, so it asks. Resuming and a first crawl
+        // both just go.
+        if case .replaces(let path) = model.startPlan() {
+            replacing = path
+            return
+        }
         model.startCrawl()
     }
 

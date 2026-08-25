@@ -48,6 +48,35 @@ public final class AppModel {
         self.selectedReportID = ReportCatalogue.all.first?.id ?? ""
     }
 
+    /// What pressing Start would do.
+    ///
+    /// The view needs this before it acts, because one of the answers destroys a
+    /// file. A crawl is not resumable just because a database exists at the path
+    /// the seed implies: the CLI writes `<host>.koda` too, and a finished crawl
+    /// has an empty frontier, so "resuming" one would look like Start doing
+    /// nothing at all.
+    public enum StartPlan: Equatable, Sendable {
+        /// Continue the crawl that is open. Nothing is lost.
+        case resume
+        case fresh(path: String)
+        /// Start over, replacing the crawl already at this path.
+        case replaces(path: String)
+        case invalid(String)
+    }
+
+    public func startPlan(databasePath: String? = nil) -> StartPlan {
+        if canResume { return .resume }
+        do {
+            let config = try settings.config(seedURL: seedURL)
+            guard let path = databasePath ?? Self.defaultDatabasePath(for: config.seedURL) else {
+                return .invalid("Could not work out where to put the crawl for \(config.seedURL).")
+            }
+            return FileManager.default.fileExists(atPath: path) ? .replaces(path: path) : .fresh(path: path)
+        } catch {
+            return .invalid(String(describing: error))
+        }
+    }
+
     /// True when Start would continue the open crawl rather than begin a new one.
     /// Changing the URL means a new crawl: resuming into a different site's
     /// frontier is never what was meant.
@@ -63,26 +92,51 @@ public final class AppModel {
     /// the form currently says. The frontier has already been filtered by those
     /// include and exclude rules, so draining the rest under different ones would
     /// leave a database that no longer matches its own `crawl_meta`.
+    /// Starts a crawl, replacing whatever is at the target path when it is not a
+    /// resume. That is what the CLI does without `--resume`, and the alternative
+    /// is worse: a finished crawl has an empty frontier, so continuing it drains
+    /// nothing and Start appears to do nothing.
+    ///
+    /// Ask `startPlan` first. This does not warn.
     @discardableResult
     public func startCrawl(databasePath: String? = nil) -> Bool {
-        if canResume, let openConfig {
+        switch startPlan(databasePath: databasePath) {
+        case .invalid(let message):
+            errorMessage = message
+            return false
+
+        case .resume:
+            guard let openConfig else { return false }
             controller.resume(config: openConfig)
             return true
-        }
-        do {
-            let config = try settings.config(seedURL: seedURL)
-            guard let path = databasePath ?? Self.defaultDatabasePath(for: config.seedURL) else {
-                errorMessage = "Could not work out where to put the crawl for \(config.seedURL)."
+
+        case .fresh(let path), .replaces(let path):
+            do {
+                let config = try settings.config(seedURL: seedURL)
+                if FileManager.default.fileExists(atPath: path) {
+                    try replaceDatabase(at: path)
+                }
+                settings.save(to: defaults)
+                reset()
+                openConfig = config
+                controller.start(config: config, dbPath: path)
+                return true
+            } catch {
+                errorMessage = String(describing: error)
                 return false
             }
-            settings.save(to: defaults)
-            reset()
-            openConfig = config
-            controller.start(config: config, dbPath: path)
-            return true
-        } catch {
-            errorMessage = String(describing: error)
-            return false
+        }
+    }
+
+    /// SQLite in WAL mode leaves a `-wal` and a `-shm` beside the database.
+    /// Removing only the database would have the next crawl replay a journal
+    /// belonging to a crawl that no longer exists.
+    private func replaceDatabase(at path: String) throws {
+        for suffix in ["", "-wal", "-shm"] {
+            let sidecar = path + suffix
+            if FileManager.default.fileExists(atPath: sidecar) {
+                try FileManager.default.removeItem(atPath: sidecar)
+            }
         }
     }
 

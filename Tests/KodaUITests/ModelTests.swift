@@ -564,3 +564,76 @@ private struct HreflangSite: HTTPClient {
                                       body: Data(body.utf8), elapsedMs: 1))
     }
 }
+
+// MARK: - What Start would do
+
+@MainActor
+@Test func startingOverAFinishedCrawlReplacesItRatherThanDrainingNothing() async throws {
+    // A finished crawl has an empty frontier. Continuing one drains nothing, so
+    // Start would appear to do nothing at all.
+    let path = NSTemporaryDirectory() + "koda-restart-\(UUID().uuidString).koda"
+    defer { for s in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: path + s) } }
+    _ = try await CrawlSession.start(dbPath: path, config: CrawlConfig(seedURL: "https://fx.test/"),
+                                     client: FixtureSite(), parser: SwiftSoupParser(), onProgress: nil)
+
+    let (model, cleanup) = scratchModel()
+    defer { cleanup() }
+    try model.openDatabase(path: path)
+    #expect(!model.canResume, "a finished crawl is not resumable")
+    #expect(model.startPlan(databasePath: path) == .replaces(path: path))
+
+    #expect(model.startCrawl(databasePath: path))
+    try await waitUntil { !model.controller.phase.isRunning }
+    #expect(model.controller.phase == .finished)
+    #expect(try model.store?.urlCounts().done ?? 0 > FixtureSite.pageCount, "it really crawled again")
+}
+
+@MainActor
+@Test func startPlanTellsTheViewWhenItIsAboutToDestroySomething() async throws {
+    let (model, cleanup) = scratchModel(client: { SlowFixtureSite() })
+    defer { cleanup() }
+    let path = NSTemporaryDirectory() + "koda-plan-\(UUID().uuidString).koda"
+    defer { for s in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: path + s) } }
+
+    model.seedURL = "https://fx.test/"
+    #expect(model.startPlan(databasePath: path) == .fresh(path: path), "nothing there yet")
+
+    #expect(model.startCrawl(databasePath: path))
+    try await waitUntil { model.controller.phase == .crawling }
+    model.controller.stop()
+    try await waitUntil { !model.controller.phase.isRunning }
+
+    #expect(model.startPlan(databasePath: path) == .resume, "an interrupted crawl continues")
+
+    // Resuming replays the stored config, so what the form says does not matter.
+    model.settings.includeText = "[unclosed"
+    #expect(model.startPlan(databasePath: path) == .resume)
+
+    // For a new crawl it matters, and the plan says so before anything is touched.
+    model.seedURL = "https://other.test/"
+    guard case .invalid(let message) = model.startPlan() else {
+        Issue.record("a bad regex is not a plan")
+        return
+    }
+    #expect(message.contains("[unclosed"))
+}
+
+@MainActor
+@Test func replacingACrawlTakesItsWriteAheadLogWithIt() async throws {
+    // WAL mode leaves -wal and -shm beside the database. Removing only the
+    // database has the next crawl replay a journal for a crawl that is gone.
+    let path = NSTemporaryDirectory() + "koda-wal-\(UUID().uuidString).koda"
+    defer { for s in ["", "-wal", "-shm"] { try? FileManager.default.removeItem(atPath: path + s) } }
+    _ = try await CrawlSession.start(dbPath: path, config: CrawlConfig(seedURL: "https://fx.test/"),
+                                     client: FixtureSite(), parser: SwiftSoupParser(), onProgress: nil)
+    try Data("stale".utf8).write(to: URL(fileURLWithPath: path + "-wal"))
+
+    let (model, cleanup) = scratchModel()
+    defer { cleanup() }
+    model.seedURL = "https://fx.test/"
+    #expect(model.startCrawl(databasePath: path))
+    try await waitUntil { !model.controller.phase.isRunning }
+
+    #expect(model.controller.phase == .finished)
+    #expect(model.errorMessage == nil)
+}
