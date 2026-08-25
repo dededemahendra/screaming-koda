@@ -114,6 +114,7 @@ struct ContentView: View {
         case .idle: return "Ready"
         case .preparing: return "Fetching robots.txt"
         case .crawling: return "Crawling"
+        case .checking: return "Checking external links and images"
         case .stopping: return "Stopping after in-flight requests"
         case .finished: return controller.databasePath.map { ($0 as NSString).lastPathComponent } ?? "Finished"
         case .stopped: return model.canResume ? "Stopped. Press Resume to continue." : "Stopped"
@@ -137,6 +138,9 @@ struct ProgressSummary: View {
                 metric("Crawled", counts.done)
                 metric("Queued", counts.queued)
                 metric("Found", counts.total)
+                if let checked = model.controller.progress?.checked, checked > 0 {
+                    metric("Checked", checked)
+                }
                 if model.controller.phase.isRunning {
                     metric("URL/s", Int(model.controller.urlsPerSecond.rounded()))
                 }

@@ -1,17 +1,32 @@
 import Foundation
 
+/// Which of a crawl's two phases is running.
+///
+/// They are separate because a slow third-party host must never starve the
+/// crawl of the site the user asked about, and separate phases are visible to
+/// the user: during the second one the frontier is empty, and a UI that only
+/// knows about the first shows a stalled crawl with nothing queued.
+public enum CrawlStage: String, Sendable, Hashable {
+    case crawling
+    /// Giving external links and images a status, after the frontier drains.
+    case checking
+}
+
 public struct CrawlProgress: Sendable {
     public let crawled: Int
     public let queued: Int
     public let discovered: Int
     /// External links and images given a status in the second phase.
     public let checked: Int
+    public let stage: CrawlStage
 
-    public init(crawled: Int, queued: Int, discovered: Int, checked: Int = 0) {
+    public init(crawled: Int, queued: Int, discovered: Int, checked: Int = 0,
+                stage: CrawlStage = .crawling) {
         self.crawled = crawled
         self.queued = queued
         self.discovered = discovered
         self.checked = checked
+        self.stage = stage
     }
 }
 
@@ -140,11 +155,7 @@ public actor CrawlEngine {
                 crawled += results.count
             }
 
-            if let onProgress {
-                let counts = try store.urlCounts()
-                onProgress(CrawlProgress(crawled: crawled, queued: counts.queued,
-                                         discovered: discovered, checked: checked))
-            }
+            try reportProgress(onProgress, stage: .crawling)
 
             if let crawlDelay, isDelayed {
                 try? await Task.sleep(nanoseconds: UInt64(crawlDelay * 1_000_000_000))
@@ -177,6 +188,11 @@ public actor CrawlEngine {
         guard config.checkExternalLinks || config.checkImages else { return }
         // One batch here can span dozens of hosts, so the global worker count is
         // no longer also the per-host count. This is where maxPerHost starts to matter.
+        // Announced before the first request, not after the first batch: this
+        // phase can spend twenty seconds on one dead host, and a UI that only
+        // hears about it afterwards shows a stalled crawl for the whole of it.
+        try reportProgress(onProgress, stage: .checking)
+
         let limiter = HostLimiter(limit: config.maxPerHost)
         let concurrency = max(config.workers, 1)
         // One claim covers many workers, so results accumulate into a transaction
@@ -228,12 +244,16 @@ public actor CrawlEngine {
                 checked += results.count
                 _ = try store.write(results: results, config: config, now: Date())
             }
-            if let onProgress {
-                let counts = try store.urlCounts()
-                onProgress(CrawlProgress(crawled: crawled, queued: counts.queued,
-                                         discovered: discovered, checked: checked))
-            }
+            try reportProgress(onProgress, stage: .checking)
         }
+    }
+
+    private func reportProgress(_ onProgress: (@Sendable (CrawlProgress) -> Void)?,
+                                stage: CrawlStage) throws {
+        guard let onProgress else { return }
+        let counts = try store.urlCounts()
+        onProgress(CrawlProgress(crawled: crawled, queued: counts.queued,
+                                 discovered: discovered, checked: checked, stage: stage))
     }
 
     /// HEAD, falling back to GET when a server rejects the method. Plenty of

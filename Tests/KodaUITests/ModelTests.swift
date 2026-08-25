@@ -495,3 +495,31 @@ private struct SlowFixtureSite: HTTPClient {
     let urls = lines.dropFirst().map { $0.components(separatedBy: ",")[0] }
     #expect(urls == urls.sorted(), "and in the order they are on screen")
 }
+
+@MainActor
+@Test func theControllerSaysWhenItIsCheckingLinksRatherThanCrawling() async throws {
+    // The frontier is empty during the status check. Without its own phase the
+    // toolbar shows a running crawl with nothing queued, which reads as stalled.
+    let controller = CrawlController(clientFactory: { SlowExternalFixtureSite() })
+    var seen: [CrawlController.Phase] = []
+    controller.start(config: CrawlConfig(seedURL: "https://fx.test/"), dbPath: nil)
+    while controller.phase.isRunning {
+        if seen.last != controller.phase { seen.append(controller.phase) }
+        try await Task.sleep(nanoseconds: 2_000_000)
+    }
+    #expect(seen.contains(.checking), "saw \(seen)")
+    #expect(controller.phase == .finished, "a late progress callback must not undo finishing")
+    #expect((controller.progress?.checked ?? 0) > 0)
+}
+
+/// The fixture site with a slow third-party host, so the status-check phase is
+/// long enough to be observed rather than raced past.
+private struct SlowExternalFixtureSite: HTTPClient {
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
+        if url.hasPrefix("https://away.test/") {
+            try? await Task.sleep(nanoseconds: 60_000_000)
+            return .response(HTTPResponse(status: 200, headers: [:], body: Data(), elapsedMs: 1))
+        }
+        return await FixtureSite().fetch(url: url, method: method, userAgent: userAgent, timeout: timeout)
+    }
+}

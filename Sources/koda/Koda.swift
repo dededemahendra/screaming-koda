@@ -117,7 +117,9 @@ struct Crawl: AsyncParsableCommand {
             onProgress: { progress in
                 // Padded so a shorter update fully overwrites a longer one; \r alone
                 // leaves the tail of the previous line on screen.
-                let text = "crawled \(progress.crawled)  queued \(progress.queued)  found \(progress.discovered)"
+                let text = progress.stage == .checking
+                    ? "checking links and images  \(progress.checked) checked"
+                    : "crawled \(progress.crawled)  queued \(progress.queued)  found \(progress.discovered)"
                 FileHandle.standardError.write(
                     Data("\r\(text.padding(toLength: max(text.count, 60), withPad: " ", startingAt: 0))".utf8)
                 )

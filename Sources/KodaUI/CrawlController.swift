@@ -14,6 +14,9 @@ public final class CrawlController {
         case idle
         case preparing
         case crawling
+        /// Giving external links and images a status. The frontier is empty by
+        /// now, so without its own case this reads as a stalled crawl.
+        case checking
         case stopping
         /// Drained the frontier and finished cleanly.
         case finished
@@ -22,7 +25,7 @@ public final class CrawlController {
         case failed(String)
 
         public var isRunning: Bool {
-            self == .preparing || self == .crawling || self == .stopping
+            self == .preparing || self == .crawling || self == .checking || self == .stopping
         }
 
         public var canStart: Bool { !isRunning }
@@ -107,8 +110,18 @@ public final class CrawlController {
         self.progress = nil
     }
 
+    /// Progress arrives on the main actor from a detached task, so an update the
+    /// engine emitted before it returned can land after the run has already
+    /// finished. Only a still-running crawl may move the phase; otherwise a late
+    /// callback would take a finished crawl back to crawling.
+    ///
+    /// A stop is the user's decision and outranks whatever the engine is partway
+    /// through, so that one holds too.
     private func record(_ update: CrawlProgress) {
         progress = update
+        if phase == .crawling || phase == .checking {
+            phase = update.stage == .checking ? .checking : .crawling
+        }
         if let startedAt { elapsed = Date().timeIntervalSince(startedAt) }
     }
 
