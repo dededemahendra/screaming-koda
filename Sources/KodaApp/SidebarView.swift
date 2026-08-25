@@ -20,6 +20,17 @@ struct SidebarView: View {
                     overview("Internal", summary.internalURLs)
                     overview("External", summary.externalURLs)
                     overview("Max depth", summary.maxDepth)
+                    if let meta = model.meta {
+                        HStack {
+                            Text(meta.isFinished ? "Crawled" : "Stopped")
+                            Spacer()
+                            Text(meta.startedAt, format: .dateTime.day().month().hour().minute())
+                                .foregroundStyle(.secondary)
+                        }
+                        .font(.caption)
+                        .selectionDisabled()
+                        .help("Took \(Duration.seconds(meta.duration).formatted(.units(allowed: [.hours, .minutes, .seconds])))")
+                    }
                 }
             }
 

@@ -11,6 +11,8 @@ public final class AppModel {
     public private(set) var table: ReportTableModel?
     public private(set) var reportCounts: [String: Int] = [:]
     public private(set) var summary: CrawlSummary?
+    /// When the open crawl ran, and whether it ever finished.
+    public private(set) var meta: CrawlMeta?
     public private(set) var selectedReportID: String
     public private(set) var selectedDetail: URLDetail?
     public private(set) var inlinks: [LinkRow] = []
@@ -187,6 +189,7 @@ public final class AppModel {
             liveCounts = try store.urlCounts()
             reportCounts = try store.reportCounts()
             summary = try store.summary()
+            meta = try store.crawlMeta()
             table?.reload()
             errorMessage = nil
         } catch {
@@ -199,6 +202,7 @@ public final class AppModel {
         table = nil
         reportCounts = [:]
         summary = nil
+        meta = nil
         liveCounts = nil
         clearSelection()
         errorMessage = nil

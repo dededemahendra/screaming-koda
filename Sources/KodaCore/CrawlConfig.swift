@@ -30,3 +30,24 @@ public struct CrawlConfig: Codable, Sendable {
         URLNormalizer.normalize(seedURL, relativeTo: nil)?.host
     }
 }
+
+/// What `crawl_meta` records about the run itself, as opposed to its settings.
+public struct CrawlMeta: Sendable, Equatable {
+    public let seedURL: String
+    public let startedAt: Date
+    /// Nil while a crawl is running, and for one that was stopped or died.
+    public let finishedAt: Date?
+
+    public init(seedURL: String, startedAt: Date, finishedAt: Date?) {
+        self.seedURL = seedURL
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+    }
+
+    public var isFinished: Bool { finishedAt != nil }
+
+    /// How long the crawl took, or has been going.
+    public var duration: TimeInterval {
+        (finishedAt ?? Date()).timeIntervalSince(startedAt)
+    }
+}

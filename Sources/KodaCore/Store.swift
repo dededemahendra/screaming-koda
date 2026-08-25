@@ -127,9 +127,27 @@ public final class Store: @unchecked Sendable {
                 sql: """
                     INSERT INTO crawl_meta (id, seed_url, started_at, config_json, schema_version)
                     VALUES (1, ?, ?, ?, 1)
-                    ON CONFLICT(id) DO UPDATE SET seed_url=excluded.seed_url, config_json=excluded.config_json
+                    ON CONFLICT(id) DO UPDATE SET seed_url=excluded.seed_url,
+                      config_json=excluded.config_json, finished_at=NULL
                     """,
                 arguments: [config.seedURL, startedAt.timeIntervalSince1970, json]
+            )
+        }
+    }
+
+    /// When the crawl ran, and whether it ever finished.
+    ///
+    /// `finishedAt` is nil for a crawl that was stopped or died, which is how
+    /// reopening a database can tell a completed crawl from a resumable one.
+    public func crawlMeta() throws -> CrawlMeta? {
+        try dbQueue.read { db in
+            guard let row = try Row.fetchOne(
+                db, sql: "SELECT seed_url, started_at, finished_at FROM crawl_meta WHERE id = 1"
+            ) else { return nil }
+            return CrawlMeta(
+                seedURL: row["seed_url"],
+                startedAt: Date(timeIntervalSince1970: row["started_at"]),
+                finishedAt: (row["finished_at"] as Double?).map(Date.init(timeIntervalSince1970:))
             )
         }
     }

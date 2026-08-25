@@ -129,3 +129,21 @@ private actor EngineBox {
     private(set) var engine: CrawlEngine?
     func set(_ engine: CrawlEngine) { self.engine = engine }
 }
+
+@Test func resumingClearsTheFinishedMarkSoAStopCannotLookDone() async throws {
+    let (store, config) = try seededStore()
+    let engine = CrawlEngine(store: store, client: WideSite(onFetch: { _ in }),
+                             parser: SwiftSoupParser(), config: config)
+    _ = try await engine.run(onProgress: nil)
+    let finished = try #require(try store.crawlMeta())
+    #expect(finished.isFinished)
+    #expect(finished.seedURL == "https://wide.test/")
+
+    // Starting again over the same database is a resume, and a resumed crawl is
+    // running. Leaving the old finish time in place would let a crawl that was
+    // stopped halfway through report itself as complete.
+    try store.initializeCrawl(config: config, startedAt: Date())
+    let reopened = try #require(try store.crawlMeta())
+    #expect(reopened.isFinished == false)
+    #expect(reopened.startedAt == finished.startedAt, "the crawl still started when it started")
+}

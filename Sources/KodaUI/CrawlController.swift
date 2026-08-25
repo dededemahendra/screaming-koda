@@ -92,14 +92,18 @@ public final class CrawlController {
         start(config: config, dbPath: databasePath)
     }
 
-    /// Opens a finished crawl for browsing, with no crawling at all.
+    /// Opens a crawl for browsing, with no crawling at all.
+    ///
+    /// A database that was never marked finished is reported as stopped, not
+    /// finished, so a crawl someone quit halfway through offers Resume rather
+    /// than quietly presenting a partial site as the whole of it.
     public func open(path: String) throws {
         guard phase.canStart else { return }
         let store = try Store(path: path)
         try store.migrate()
         self.store = store
         self.databasePath = path
-        self.phase = .finished
+        self.phase = (try store.crawlMeta()?.isFinished ?? true) ? .finished : .stopped
         self.progress = nil
     }
 

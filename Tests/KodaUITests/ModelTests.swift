@@ -384,3 +384,43 @@ private struct SlowFixtureSite: HTTPClient {
         return await FixtureSite().fetch(url: url, method: method, userAgent: userAgent, timeout: timeout)
     }
 }
+
+@MainActor
+@Test func openingAnInterruptedCrawlOffersResumeRatherThanClaimingItFinished() async throws {
+    let (model, cleanup) = scratchModel(client: { SlowFixtureSite() })
+    defer { cleanup() }
+    let path = NSTemporaryDirectory() + "koda-reopen-\(UUID().uuidString).koda"
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    model.seedURL = "https://fx.test/"
+    #expect(model.startCrawl(databasePath: path))
+    try await waitUntil { model.controller.phase == .crawling }
+    model.controller.stop()
+    try await waitUntil { !model.controller.phase.isRunning }
+
+    // A fresh app, opening the file someone quit halfway through.
+    let (reopened, cleanupReopened) = scratchModel(client: { SlowFixtureSite() })
+    defer { cleanupReopened() }
+    try reopened.openDatabase(path: path)
+
+    #expect(reopened.controller.phase == .stopped, "an unfinished crawl is not a finished one")
+    #expect(reopened.canResume)
+    #expect(reopened.meta?.isFinished == false)
+}
+
+@MainActor
+@Test func openingACompletedCrawlSaysSoAndDoesNotOfferResume() async throws {
+    let path = NSTemporaryDirectory() + "koda-done-\(UUID().uuidString).koda"
+    defer { try? FileManager.default.removeItem(atPath: path) }
+    _ = try await CrawlSession.start(dbPath: path, config: CrawlConfig(seedURL: "https://fx.test/"),
+                                     client: FixtureSite(), parser: SwiftSoupParser(), onProgress: nil)
+
+    let (model, cleanup) = scratchModel()
+    defer { cleanup() }
+    try model.openDatabase(path: path)
+
+    #expect(model.controller.phase == .finished)
+    #expect(!model.canResume)
+    #expect(model.meta?.isFinished == true)
+    #expect((model.meta?.duration ?? -1) >= 0)
+}
