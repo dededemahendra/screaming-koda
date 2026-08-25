@@ -43,10 +43,7 @@ struct KodaApp: App {
 
     private func load(path: String) {
         do {
-            model.reset()
-            try model.controller.open(path: path)
-            if let seed = try model.store?.loadConfig()?.seedURL { model.seedURL = seed }
-            model.refresh()
+            try model.openDatabase(path: path)
         } catch {
             present(error: "Could not open \((path as NSString).lastPathComponent): \(error)")
         }

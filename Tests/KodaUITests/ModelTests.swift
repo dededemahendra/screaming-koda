@@ -240,3 +240,147 @@ private func waitUntil(timeout: TimeInterval = 10, _ condition: @MainActor () ->
     model.reset()
     #expect(model.liveCounts == nil)
 }
+
+// MARK: - Starting, resuming, and reopening
+
+/// A scratch defaults suite, so a test never reads or writes the real one.
+@MainActor
+private func scratchModel(client: @escaping @Sendable () -> any HTTPClient = { FixtureSite() })
+    -> (model: AppModel, cleanup: () -> Void) {
+    let name = "koda.model.\(UUID().uuidString)"
+    let suite = UserDefaults(suiteName: name)!
+    let model = AppModel(controller: CrawlController(clientFactory: client), defaults: suite)
+    return (model, { suite.removePersistentDomain(forName: name) })
+}
+
+@MainActor
+@Test func startingACrawlUsesTheConfiguredSettings() async throws {
+    let (model, cleanup) = scratchModel()
+    defer { cleanup() }
+    let path = NSTemporaryDirectory() + "koda-start-\(UUID().uuidString).koda"
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    model.seedURL = "https://fx.test/"
+    model.settings.workers = 3
+    model.settings.checkExternalLinks = false
+    model.settings.excludeText = "/p1[0-9]"
+
+    #expect(model.startCrawl(databasePath: path))
+    try await waitUntil { !model.controller.phase.isRunning }
+
+    let stored = try #require(try model.store?.loadConfig())
+    #expect(stored.workers == 3)
+    #expect(stored.checkExternalLinks == false)
+    #expect(stored.exclude == ["/p1[0-9]"])
+}
+
+@MainActor
+@Test func invalidSettingsReportAProblemInsteadOfStarting() {
+    let (model, cleanup) = scratchModel()
+    defer { cleanup() }
+    model.seedURL = "https://fx.test/"
+    model.settings.includeText = "[unclosed"
+
+    #expect(model.startCrawl(databasePath: nil) == false)
+    #expect(model.controller.phase == .idle)
+    #expect(model.errorMessage?.contains("[unclosed") == true)
+
+    model.clearError()
+    #expect(model.errorMessage == nil)
+}
+
+@MainActor
+@Test func startingAlsoPersistsTheSettingsForNextTime() async throws {
+    let name = "koda.model.\(UUID().uuidString)"
+    let suite = UserDefaults(suiteName: name)!
+    defer { suite.removePersistentDomain(forName: name) }
+    let path = NSTemporaryDirectory() + "koda-persist-\(UUID().uuidString).koda"
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let model = AppModel(controller: CrawlController(clientFactory: { FixtureSite() }), defaults: suite)
+    model.seedURL = "https://fx.test/"
+    model.settings.crawlSubdomains = true
+    #expect(model.startCrawl(databasePath: path))
+    try await waitUntil { !model.controller.phase.isRunning }
+
+    let relaunched = AppModel(controller: CrawlController(clientFactory: { FixtureSite() }), defaults: suite)
+    #expect(relaunched.settings.crawlSubdomains == true)
+}
+
+@MainActor
+@Test func openingADatabaseAdoptsTheSettingsItWasCrawledWith() async throws {
+    let path = NSTemporaryDirectory() + "koda-open-\(UUID().uuidString).koda"
+    defer { try? FileManager.default.removeItem(atPath: path) }
+    var config = CrawlConfig(seedURL: "https://fx.test/")
+    config.maxDepth = 2
+    config.exclude = ["/p2"]
+    config.respectRobots = false
+    _ = try await CrawlSession.start(dbPath: path, config: config, client: FixtureSite(),
+                                     parser: SwiftSoupParser(), onProgress: nil)
+
+    let (model, cleanup) = scratchModel()
+    defer { cleanup() }
+    try model.openDatabase(path: path)
+
+    #expect(model.seedURL == "https://fx.test/")
+    #expect(model.settings.maxDepthText == "2")
+    #expect(model.settings.excludeText == "/p2")
+    #expect(model.settings.respectRobots == false)
+    #expect(model.summary != nil, "opening also loads the reports")
+}
+
+@MainActor
+@Test func resumeReplaysTheConfigTheCrawlStartedWith() async throws {
+    let (model, cleanup) = scratchModel(client: { SlowFixtureSite() })
+    defer { cleanup() }
+    let path = NSTemporaryDirectory() + "koda-resume-\(UUID().uuidString).koda"
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    model.seedURL = "https://fx.test/"
+    model.settings.excludeText = "/p2[0-9]"
+    #expect(model.startCrawl(databasePath: path))
+    try await waitUntil { model.controller.phase == .crawling }
+    model.controller.stop()
+    try await waitUntil { !model.controller.phase.isRunning }
+    #expect(model.canResume)
+
+    // The form now says something else. The frontier was already filtered by the
+    // original rules, so finishing it under new ones would leave a database that
+    // does not match its own crawl_meta.
+    model.settings.excludeText = ""
+    #expect(model.startCrawl())
+    try await waitUntil { !model.controller.phase.isRunning }
+
+    let stored = try #require(try model.store?.loadConfig())
+    #expect(stored.exclude == ["/p2[0-9]"])
+    let crawled = try #require(try model.store?.urlCounts().done)
+    #expect(crawled > 0)
+}
+
+@MainActor
+@Test func changingTheURLMeansANewCrawlRatherThanAResume() async throws {
+    let (model, cleanup) = scratchModel(client: { SlowFixtureSite() })
+    defer { cleanup() }
+    let path = NSTemporaryDirectory() + "koda-newseed-\(UUID().uuidString).koda"
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    model.seedURL = "https://fx.test/"
+    #expect(model.startCrawl(databasePath: path))
+    try await waitUntil { model.controller.phase == .crawling }
+    model.controller.stop()
+    try await waitUntil { !model.controller.phase.isRunning }
+
+    #expect(model.canResume)
+    model.seedURL = "https://other.test/"
+    #expect(!model.canResume, "resuming into another site's frontier is never what was meant")
+}
+
+/// The fixture site with enough delay per page that a stop lands mid-crawl.
+private struct SlowFixtureSite: HTTPClient {
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
+        if !url.hasSuffix("robots.txt") && url != "https://fx.test/" {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return await FixtureSite().fetch(url: url, method: method, userAgent: userAgent, timeout: timeout)
+    }
+}

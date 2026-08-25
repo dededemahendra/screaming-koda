@@ -4,7 +4,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var model: AppModel
-    @State private var isShowingCrawlError = false
+    @State private var isShowingSettings = false
 
     private var controller: CrawlController { model.controller }
 
@@ -22,6 +22,12 @@ struct ContentView: View {
         .toolbar { toolbar }
         .navigationTitle("Screaming Koda")
         .navigationSubtitle(subtitle)
+        .sheet(isPresented: $isShowingSettings) { CrawlSettingsView(model: model) }
+        .safeAreaInset(edge: .bottom) {
+            if let message = model.errorMessage {
+                ErrorBanner(message: message) { model.clearError() }
+            }
+        }
         // WAL means these reads never block the writer, so the table can be
         // browsed while the crawl is still running.
         .task(id: controller.phase) {
@@ -80,6 +86,10 @@ struct ContentView: View {
                 .disabled(controller.phase.isRunning)
         }
         ToolbarItem {
+            Button("Crawl Settings", systemImage: "slider.horizontal.3") { isShowingSettings = true }
+                .disabled(controller.phase.isRunning)
+        }
+        ToolbarItem {
             if controller.phase.isRunning {
                 Button("Stop", systemImage: "stop.fill") { controller.stop() }
                     .disabled(controller.phase == .stopping)
@@ -92,29 +102,11 @@ struct ContentView: View {
     }
 
     private var startLabel: String {
-        controller.phase == .stopped ? "Resume" : "Start"
+        model.canResume ? "Resume" : "Start"
     }
 
     private func start() {
-        let seed = model.seedURL.trimmingCharacters(in: .whitespaces)
-        guard !seed.isEmpty else { return }
-        if controller.phase == .stopped, let path = controller.databasePath {
-            var config = CrawlConfig(seedURL: seed)
-            config.workers = 5
-            controller.start(config: config, dbPath: path)
-            return
-        }
-        model.reset()
-        controller.start(config: CrawlConfig(seedURL: seed), dbPath: defaultDatabasePath(for: seed))
-    }
-
-    /// Named after the host, in the same place the CLI writes it, so the two
-    /// halves of the tool can open each other's files.
-    private func defaultDatabasePath(for seed: String) -> String? {
-        guard let host = URLNormalizer.normalize(seed, relativeTo: nil)?.host else { return nil }
-        let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        return directory.appendingPathComponent("\(host).koda").path
+        model.startCrawl()
     }
 
     private var subtitle: String {
@@ -124,7 +116,7 @@ struct ContentView: View {
         case .crawling: return "Crawling"
         case .stopping: return "Stopping after in-flight requests"
         case .finished: return controller.databasePath.map { ($0 as NSString).lastPathComponent } ?? "Finished"
-        case .stopped: return "Stopped. Press Resume to continue."
+        case .stopped: return model.canResume ? "Stopped. Press Resume to continue." : "Stopped"
         case .failed(let message): return "Failed: \(message)"
         }
     }
@@ -158,5 +150,26 @@ struct ProgressSummary: View {
             Text("\(value)").font(.caption.monospacedDigit().bold())
             Text(label).font(.caption2).foregroundStyle(.secondary)
         }
+    }
+}
+
+/// A crawl or query failure, said out loud rather than left in a property.
+/// Errors here are recoverable — a report that would not run, a database that
+/// would not open — so a banner is right and a modal is not.
+struct ErrorBanner: View {
+    let message: String
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            Text(message).font(.caption).lineLimit(3).textSelection(.enabled)
+            Spacer()
+            Button("Dismiss", action: dismiss).buttonStyle(.borderless).font(.caption)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.regularMaterial)
+        .overlay(alignment: .top) { Divider() }
     }
 }

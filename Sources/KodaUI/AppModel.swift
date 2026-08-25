@@ -30,10 +30,86 @@ public final class AppModel {
     public var seedURL: String = ""
     /// Hide reports with nothing in them, which is most of them on a healthy site.
     public var showsEmptyReports = false
+    /// What the next crawl will run with. Persisted, because someone who has to
+    /// ignore robots.txt on their staging site has to do it every time.
+    public var settings: CrawlSettings
+    /// What the open database was actually crawled with, from `crawl_meta`.
+    public private(set) var openConfig: CrawlConfig?
 
-    public init(controller: CrawlController = CrawlController()) {
+    private let defaults: UserDefaults
+
+    public init(controller: CrawlController = CrawlController(), defaults: UserDefaults = .standard) {
         self.controller = controller
+        self.defaults = defaults
+        self.settings = CrawlSettings.load(from: defaults)
         self.selectedReportID = ReportCatalogue.all.first?.id ?? ""
+    }
+
+    /// True when Start would continue the open crawl rather than begin a new one.
+    /// Changing the URL means a new crawl: resuming into a different site's
+    /// frontier is never what was meant.
+    public var canResume: Bool {
+        guard controller.phase == .stopped, controller.databasePath != nil,
+              let openConfig else { return false }
+        return Self.sameURL(openConfig.seedURL, seedURL)
+    }
+
+    /// Starts a crawl, or continues the open one.
+    ///
+    /// Resuming replays the config the crawl was started with rather than what
+    /// the form currently says. The frontier has already been filtered by those
+    /// include and exclude rules, so draining the rest under different ones would
+    /// leave a database that no longer matches its own `crawl_meta`.
+    @discardableResult
+    public func startCrawl(databasePath: String? = nil) -> Bool {
+        if canResume, let openConfig {
+            controller.resume(config: openConfig)
+            return true
+        }
+        do {
+            let config = try settings.config(seedURL: seedURL)
+            guard let path = databasePath ?? Self.defaultDatabasePath(for: config.seedURL) else {
+                errorMessage = "Could not work out where to put the crawl for \(config.seedURL)."
+                return false
+            }
+            settings.save(to: defaults)
+            reset()
+            openConfig = config
+            controller.start(config: config, dbPath: path)
+            return true
+        } catch {
+            errorMessage = String(describing: error)
+            return false
+        }
+    }
+
+    /// Opens a finished crawl for browsing, and adopts the settings it ran with
+    /// so the form describes what is on screen rather than the app's defaults.
+    public func openDatabase(path: String) throws {
+        reset()
+        try controller.open(path: path)
+        if let config = try store?.loadConfig() {
+            openConfig = config
+            seedURL = config.seedURL
+            settings = CrawlSettings(from: config)
+        }
+        refresh()
+    }
+
+    /// Where a new crawl of `seed` goes by default: named after the host, beside
+    /// the ones the CLI writes, so the two halves of the tool open each other's files.
+    public static func defaultDatabasePath(for seed: String, in directory: URL? = nil) -> String? {
+        guard let host = URLNormalizer.normalize(seed, relativeTo: nil)?.host else { return nil }
+        let base = directory
+            ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        return base.appendingPathComponent("\(host).koda").path
+    }
+
+    private static func sameURL(_ a: String, _ b: String) -> Bool {
+        guard let left = URLNormalizer.normalize(a, relativeTo: nil),
+              let right = URLNormalizer.normalize(b, relativeTo: nil) else { return false }
+        return left.absoluteString == right.absoluteString
     }
 
     public var store: Store? { controller.store }
@@ -74,6 +150,10 @@ public final class AppModel {
             errorMessage = String(describing: error)
             clearSelection()
         }
+    }
+
+    public func clearError() {
+        errorMessage = nil
     }
 
     public func clearSelection() {
