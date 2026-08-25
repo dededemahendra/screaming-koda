@@ -152,6 +152,19 @@ public final class AppModel {
         }
     }
 
+    /// A name for the open crawl, for export filenames. The host if there is one,
+    /// since that is what the database is named after.
+    public var crawlName: String {
+        if let host = openConfig.flatMap({ URLNormalizer.normalize($0.seedURL, relativeTo: nil)?.host }) {
+            return host
+        }
+        if let path = controller.databasePath {
+            let name = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+            if !name.isEmpty { return name }
+        }
+        return "koda-reports"
+    }
+
     public func clearError() {
         errorMessage = nil
     }

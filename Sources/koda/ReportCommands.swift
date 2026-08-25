@@ -74,29 +74,49 @@ struct Report: AsyncParsableCommand {
     }
 }
 
+enum ExportFormat: String, ExpressibleByArgument, CaseIterable {
+    /// One file per report. The format anything can read, and the default.
+    case csv
+    /// One workbook, one tab per report. For sending someone the whole crawl.
+    case xlsx
+}
+
 struct Export: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Write every report with findings to CSV files."
+        abstract: "Write every report with findings to CSV files or one spreadsheet."
     )
 
     @Option(name: .long, help: "Database path. Defaults to the only .koda file here.")
     var db: String?
 
-    @Option(name: .long, help: "Output directory.")
-    var out: String = "koda-reports"
+    @Option(name: .long, help: "csv writes a directory of files; xlsx writes one workbook.")
+    var format: ExportFormat = .csv
+
+    @Option(name: .long, help: "Output path. Defaults to koda-reports, or koda-reports.xlsx.")
+    var out: String?
 
     mutating func run() async throws {
         let store = try Store(path: try DatabaseLocator.resolve(explicit: db))
         try store.migrate()
 
-        let written = try store.writeAllCSVs(to: out)
-        if written.isEmpty {
-            print("No findings to export.")
-            return
-        }
-        print("Wrote \(written.count) \(written.count == 1 ? "report" : "reports") to \(out)/")
-        for path in written {
-            print("  \((path as NSString).lastPathComponent)")
+        switch format {
+        case .csv:
+            let directory = out ?? "koda-reports"
+            let written = try store.writeAllCSVs(to: directory)
+            if written.isEmpty {
+                print("No findings to export.")
+                return
+            }
+            print("Wrote \(written.count) \(written.count == 1 ? "report" : "reports") to \(directory)/")
+            for path in written {
+                print("  \((path as NSString).lastPathComponent)")
+            }
+
+        case .xlsx:
+            let path = out ?? "koda-reports.xlsx"
+            try store.writeXLSX(to: path)
+            let tabs = try store.reportCounts().values.filter { $0 > 0 }.count
+            print("Wrote \(tabs + 1) \(tabs == 0 ? "tab" : "tabs") to \(path)")
         }
     }
 }

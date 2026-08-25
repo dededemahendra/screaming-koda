@@ -27,8 +27,11 @@ struct KodaApp: App {
                     .disabled(model.controller.phase.isRunning)
             }
             CommandGroup(after: .toolbar) {
-                Button("Export Reports…") { export() }
+                Button("Export Workbook…") { exportWorkbook() }
                     .keyboardShortcut("e")
+                    .disabled(model.store == nil)
+                Button("Export CSVs…") { exportCSVs() }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
                     .disabled(model.store == nil)
             }
         }
@@ -58,7 +61,24 @@ struct KodaApp: App {
         load(path: url.path)
     }
 
-    private func export() {
+    /// One workbook, one tab per report with findings. What you send someone.
+    private func exportWorkbook() {
+        guard let store = model.store else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "xlsx") ?? .data]
+        panel.nameFieldStringValue = "\(model.crawlName).xlsx"
+        panel.prompt = "Export"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try store.writeXLSX(to: url.path)
+            reveal(url)
+        } catch {
+            present(error: "Export failed: \(error)")
+        }
+    }
+
+    /// A directory of one CSV per report. What you feed a script.
+    private func exportCSVs() {
         guard let store = model.store else { return }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -66,12 +86,23 @@ struct KodaApp: App {
         panel.canCreateDirectories = true
         panel.prompt = "Export"
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        let directory = url.appendingPathComponent(model.crawlName)
         do {
-            let written = try store.writeAllCSVs(to: url.appendingPathComponent("koda-reports").path)
-            present(error: "Exported \(written.count) reports.", style: .informational)
+            let written = try store.writeAllCSVs(to: directory.path)
+            if written.isEmpty {
+                present(error: "No findings to export.", style: .informational)
+            } else {
+                reveal(directory)
+            }
         } catch {
             present(error: "Export failed: \(error)")
         }
+    }
+
+    /// Selecting the export in the Finder says "it worked" and says where, which
+    /// is what an alert saying "exported 12 reports" was failing to do.
+    private func reveal(_ url: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     private func present(error message: String, style: NSAlert.Style = .warning) {
