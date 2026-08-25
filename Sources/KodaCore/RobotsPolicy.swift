@@ -79,6 +79,9 @@ public struct RobotsRules: Sendable {
         return groups["*"]
     }
 
+    /// `path` is the path *and query*: robots.txt rules are matched against both,
+    /// and `Disallow: /*?sort=` is an ordinary rule that matching the path alone
+    /// would silently ignore. Pass `NormalizedURL.pathWithQuery`.
     public func isAllowed(path: String, userAgent: String) -> Bool {
         guard let group = group(for: userAgent) else { return true }
         var best: (length: Int, isAllow: Bool)?

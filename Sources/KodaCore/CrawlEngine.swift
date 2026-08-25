@@ -299,7 +299,7 @@ public actor CrawlEngine {
         item: FrontierItem, config: CrawlConfig, robots: RobotsRules,
         client: any HTTPClient, parser: any PageParser, retainBodies: Bool
     ) async -> CrawlResult? {
-        if config.respectRobots, !robots.isAllowed(path: item.url.path, userAgent: config.userAgent) {
+        if config.respectRobots, !robots.isAllowed(path: item.url.pathWithQuery, userAgent: config.userAgent) {
             return nil
         }
 

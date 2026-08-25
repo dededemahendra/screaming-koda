@@ -5,12 +5,17 @@ public struct NormalizedURL: Hashable, Sendable {
     public let absoluteString: String
     public let host: String
     public let path: String
+    /// Path plus query. What robots.txt rules are matched against: `Disallow:
+    /// /*?sort=` and `Disallow: /search?` are ordinary rules, and matching the
+    /// path alone silently ignores every one of them.
+    public let pathWithQuery: String
     public let sha256: Data
 
-    init(absoluteString: String, host: String, path: String) {
+    init(absoluteString: String, host: String, path: String, query: String? = nil) {
         self.absoluteString = absoluteString
         self.host = host
         self.path = path
+        self.pathWithQuery = query.map { "\(path)?\($0)" } ?? path
         self.sha256 = Data(SHA256.hash(data: Data(absoluteString.utf8)))
     }
 }
@@ -68,7 +73,8 @@ public enum URLNormalizer {
         return NormalizedURL(
             absoluteString: finalURL.absoluteString,
             host: rawHost,
-            path: components.path
+            path: components.path,
+            query: components.query
         )
     }
 }

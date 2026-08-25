@@ -122,3 +122,26 @@ Sitemap: https://example.com/sitemap.xml
     #expect(!r.isAllowed(path: "/x", userAgent: "A"))
     #expect(!r.isAllowed(path: "/x", userAgent: "B"))
 }
+
+@Test func rulesMatchTheQueryStringToo() {
+    // Faceted navigation is the reason robots.txt exists on most large sites, and
+    // every one of those rules is about the query, not the path.
+    let rules = RobotsRules.parse("""
+        User-agent: *
+        Disallow: /*?sort=
+        Disallow: /search?
+        """)
+    #expect(!rules.isAllowed(path: "/shop/shoes?sort=price", userAgent: "ScreamingKoda/0.1"))
+    #expect(!rules.isAllowed(path: "/search?q=hat", userAgent: "ScreamingKoda/0.1"))
+    #expect(rules.isAllowed(path: "/shop/shoes", userAgent: "ScreamingKoda/0.1"))
+    #expect(rules.isAllowed(path: "/searching", userAgent: "ScreamingKoda/0.1"))
+}
+
+@Test func aNormalizedURLCarriesItsQueryForRobotsMatching() {
+    let faceted = URLNormalizer.normalize("https://shop.test/shoes?sort=price&page=2", relativeTo: nil)!
+    #expect(faceted.path == "/shoes")
+    #expect(faceted.pathWithQuery == "/shoes?sort=price&page=2")
+
+    let plain = URLNormalizer.normalize("https://shop.test/shoes", relativeTo: nil)!
+    #expect(plain.pathWithQuery == "/shoes", "no query means no question mark")
+}
