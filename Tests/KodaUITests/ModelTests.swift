@@ -424,3 +424,74 @@ private struct SlowFixtureSite: HTTPClient {
     #expect(model.meta?.isFinished == true)
     #expect((model.meta?.duration ?? -1) >= 0)
 }
+
+// MARK: - Copying a selection
+
+@MainActor
+@Test func copyingASelectionGivesTabSeparatedTextWithAHeader() async throws {
+    let model = ReportTableModel(store: try await fixtureStore(), definition: internalAll)
+    model.toggleSort(column: 0)
+
+    let text = model.clipboardText(for: IndexSet(0..<2))
+    let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+    #expect(lines.count == 3)
+    #expect(lines[0] == internalAll.columns.joined(separator: "\t"))
+    // Every line has a field per column, so a spreadsheet pastes it into cells.
+    for line in lines {
+        #expect(line.components(separatedBy: "\t").count == internalAll.columns.count)
+    }
+    #expect(lines[1].hasPrefix("https://fx.test/"))
+
+    #expect(model.clipboardText(for: IndexSet(0..<1), includingHeader: false)
+        .split(separator: "\n").count == 1)
+    #expect(model.clipboardText(for: IndexSet(), includingHeader: false).isEmpty)
+}
+
+@MainActor
+@Test func aTabInsideAValueCannotShiftTheColumns() async throws {
+    // A title is whatever the site put in it, and a literal tab would silently
+    // push every later column one to the right in whatever it is pasted into.
+    let store = try emptyStore()
+    let seed = URLNormalizer.normalize("https://t.test/", relativeTo: nil)!
+    let url = try store.insertURLIfNew(seed, depth: 0, isInternal: true, discoveredAt: Date())
+    var facts = PageFacts()
+    facts.title = "A\tB\nC"
+    facts.titleCount = 1
+    _ = try store.write(results: [CrawlResult(
+        urlID: url, url: seed, depth: 0,
+        status: 200, errorKind: nil, contentType: "text/html", contentLength: 10, responseTimeMs: 1,
+        redirectTarget: nil, bodyGz: nil, xRobotsTag: nil, facts: facts
+    )], config: CrawlConfig(seedURL: "https://t.test/"), now: Date())
+
+    let model = ReportTableModel(store: store, definition: ReportCatalogue.report(id: "internal-all")!)
+    let line = model.clipboardText(for: IndexSet(integer: 0), includingHeader: false)
+    #expect(!line.contains("\n"))
+    #expect(line.components(separatedBy: "\t").count == internalAll.columns.count)
+    #expect(line.contains("A B C"))
+}
+
+@MainActor
+@Test func anAggregateReportOffersNoURLsToOpen() async throws {
+    let store = try await fixtureStore()
+    let urls = ReportTableModel(store: store, definition: ReportCatalogue.report(id: "depth-distribution")!)
+    #expect(urls.urls(at: IndexSet(0..<3)).isEmpty, "a histogram row has no URL to open")
+
+    let pages = ReportTableModel(store: store, definition: internalAll)
+    #expect(pages.urls(at: IndexSet(0..<3)).count == 3)
+    #expect(pages.urls(at: IndexSet(0..<3)).allSatisfy { $0.hasPrefix("https://") })
+}
+
+@MainActor
+@Test func exportingTheCurrentReportKeepsItsSortAndFilter() async throws {
+    let store = try await fixtureStore()
+    let model = ReportTableModel(store: store, definition: internalAll)
+    model.setFilter("p1")
+    model.toggleSort(column: 0)
+
+    let csv = try store.csv(for: model.query)
+    let lines = csv.components(separatedBy: CSVWriter.lineTerminator).filter { !$0.isEmpty }
+    #expect(lines.count == model.rowCount + 1, "the header plus exactly the rows on screen")
+    #expect(lines.dropFirst().allSatisfy { $0.contains("p1") })
+    let urls = lines.dropFirst().map { $0.components(separatedBy: ",")[0] }
+    #expect(urls == urls.sorted(), "and in the order they are on screen")
+}

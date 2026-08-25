@@ -35,6 +35,12 @@ extension Store {
         CSVWriter.document(columns: definition.columns, rows: try runReport(definition))
     }
 
+    /// Renders a report as CSV with the table's sort and filter applied, so
+    /// exporting what is on screen exports what is on screen.
+    public func csv(for query: ReportQuery) throws -> String {
+        CSVWriter.document(columns: query.definition.columns, rows: try rows(for: query))
+    }
+
     /// Writes a report to a file, creating or replacing it.
     public func writeCSV(for definition: ReportDefinition, to path: String) throws {
         try Data(try csv(for: definition).utf8).write(to: URL(fileURLWithPath: path), options: .atomic)

@@ -18,14 +18,24 @@ struct ReportTableView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let table = NSTableView()
+        let table = KodaTableView()
+        // Cmd-C arrives as `copy:` down the responder chain from the first
+        // responder, which is the table. NSTableView does not implement it, so
+        // without this the standard Edit menu item is permanently greyed out.
+        table.onCopy = { [weak coordinator = context.coordinator] in coordinator?.copySelection(nil) }
         table.usesAlternatingRowBackgroundColors = true
         table.style = .inset
         table.rowSizeStyle = .default
-        table.allowsMultipleSelection = false
+        // Multiple selection, because the thing people do with a list of broken
+        // links is select all of them and copy.
+        table.allowsMultipleSelection = true
+        table.target = context.coordinator
+        table.doubleAction = #selector(Coordinator.openSelectedURLs)
+        table.menu = context.coordinator.makeMenu()
         table.dataSource = context.coordinator
         table.delegate = context.coordinator
         context.coordinator.rebuildColumns(of: table)
+        context.coordinator.remember(table)
 
         let scrollView = NSScrollView()
         scrollView.documentView = table
@@ -50,7 +60,7 @@ struct ReportTableView: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+    final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
         var model: ReportTableModel
         var onSelectRow: (Int?) -> Void
         private(set) var shownReportID: String = ""
@@ -80,11 +90,11 @@ struct ReportTableView: NSViewRepresentable {
         /// A reload drops the selection, which would otherwise clear the inspector
         /// every time the refresh timer fires mid-crawl.
         func reloadPreservingSelection(_ table: NSTableView) {
-            let selected = table.selectedRow
+            let selected = table.selectedRowIndexes.filteredIndexSet { $0 < model.rowCount }
             isReloading = true
             table.reloadData()
-            if selected >= 0 && selected < model.rowCount {
-                table.selectRowIndexes(IndexSet(integer: selected), byExtendingSelection: false)
+            if !selected.isEmpty {
+                table.selectRowIndexes(selected, byExtendingSelection: false)
             }
             isReloading = false
         }
@@ -123,6 +133,79 @@ struct ReportTableView: NSViewRepresentable {
             onSelectRow(table.selectedRow >= 0 ? table.selectedRow : nil)
         }
 
+        // MARK: Actions
+
+        /// A right-click acts on the row under the pointer unless it is already
+        /// part of the selection, which is how every AppKit table behaves.
+        private func actionRows(_ table: NSTableView) -> IndexSet {
+            let clicked = table.clickedRow
+            if clicked >= 0, !table.selectedRowIndexes.contains(clicked) {
+                return IndexSet(integer: clicked)
+            }
+            return table.selectedRowIndexes.isEmpty && clicked >= 0
+                ? IndexSet(integer: clicked)
+                : table.selectedRowIndexes
+        }
+
+        func makeMenu() -> NSMenu {
+            let menu = NSMenu()
+            menu.delegate = self
+            for (title, action) in [
+                ("Copy", #selector(copySelection(_:))),
+                ("Copy URL", #selector(copySelectedURLs(_:))),
+                ("Open in Browser", #selector(openSelectedURLs(_:))),
+            ] {
+                let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+                item.target = self
+                menu.addItem(item)
+            }
+            return menu
+        }
+
+        @objc func copySelection(_ sender: Any?) {
+            guard let table = tableView(for: sender) else { return }
+            let text = model.clipboardText(for: actionRows(table))
+            guard !text.isEmpty else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        }
+
+        @objc func copySelectedURLs(_ sender: Any?) {
+            guard let table = tableView(for: sender) else { return }
+            let urls = model.urls(at: actionRows(table))
+            guard !urls.isEmpty else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(urls.joined(separator: "\n"), forType: .string)
+        }
+
+        /// Capped, because double-clicking with two hundred rows selected should
+        /// not open two hundred tabs.
+        @objc func openSelectedURLs(_ sender: Any?) {
+            guard let table = tableView(for: sender) else { return }
+            for url in model.urls(at: actionRows(table)).prefix(20) {
+                guard let parsed = URL(string: url), parsed.scheme?.hasPrefix("http") == true else { continue }
+                NSWorkspace.shared.open(parsed)
+            }
+        }
+
+        private var table: NSTableView?
+
+        private func tableView(for sender: Any?) -> NSTableView? {
+            if let sender = sender as? NSTableView { return sender }
+            return table
+        }
+
+        func menuWillOpen(_ menu: NSMenu) {
+            guard let table else { return }
+            let rows = actionRows(table)
+            let hasURLs = !model.urls(at: rows).isEmpty
+            menu.item(withTitle: "Copy")?.isEnabled = !rows.isEmpty
+            menu.item(withTitle: "Copy URL")?.isEnabled = hasURLs
+            menu.item(withTitle: "Open in Browser")?.isEnabled = hasURLs
+        }
+
+        func remember(_ table: NSTableView) { self.table = table }
+
         func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
             guard let descriptor = tableView.sortDescriptors.first,
                   let key = descriptor.key, let column = Int(key)
@@ -134,5 +217,24 @@ struct ReportTableView: NSViewRepresentable {
             tableView.reloadData()
             tableView.scrollRowToVisible(0)
         }
+    }
+}
+
+
+/// An `NSTableView` that answers `copy:`.
+///
+/// Copy is a responder-chain action, and AppKit's table does not implement it,
+/// so the standard Edit menu item stays greyed out no matter what the
+/// contextual menu offers.
+final class KodaTableView: NSTableView {
+    var onCopy: (() -> Void)?
+
+    @objc func copy(_ sender: Any?) {
+        onCopy?()
+    }
+
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(copy(_:)) { return !selectedRowIndexes.isEmpty }
+        return super.validateUserInterfaceItem(item)
     }
 }

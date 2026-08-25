@@ -27,6 +27,9 @@ struct KodaApp: App {
                     .disabled(model.controller.phase.isRunning)
             }
             CommandGroup(after: .toolbar) {
+                Button("Export Current Report…") { exportCurrentReport() }
+                    .keyboardShortcut("e", modifiers: [.command, .option])
+                    .disabled(model.table == nil)
                 Button("Export Workbook…") { exportWorkbook() }
                     .keyboardShortcut("e")
                     .disabled(model.store == nil)
@@ -59,6 +62,24 @@ struct KodaApp: App {
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         load(path: url.path)
+    }
+
+    /// Just the report on screen, sorted and filtered as it is on screen. The
+    /// whole-crawl exports ignore both, which is right for them and wrong here:
+    /// someone who has just narrowed a report to eleven rows wants the eleven.
+    private func exportCurrentReport() {
+        guard let store = model.store, let table = model.table else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.nameFieldStringValue = "\(table.definition.id).csv"
+        panel.prompt = "Export"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try Data(try store.csv(for: table.query).utf8).write(to: url, options: .atomic)
+            reveal(url)
+        } catch {
+            present(error: "Export failed: \(error)")
+        }
     }
 
     /// One workbook, one tab per report with findings. What you send someone.

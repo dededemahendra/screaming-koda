@@ -78,6 +78,37 @@ public final class ReportTableModel {
         return row(at: index)?.first ?? nil
     }
 
+    /// The rows at these indices, in table order, skipping any that have scrolled
+    /// out of the cache's reach. For copying a selection.
+    public func rows(at indices: IndexSet) -> [[String?]] {
+        indices.sorted().compactMap { row(at: $0) }
+    }
+
+    /// A selection as tab-separated text.
+    ///
+    /// Tabs rather than commas: this goes to the clipboard, and every spreadsheet
+    /// pastes TSV into cells while CSV lands in one. A tab inside a value would
+    /// break that, so tabs and newlines within a cell become spaces.
+    public func clipboardText(for indices: IndexSet, includingHeader: Bool = true) -> String {
+        var lines: [String] = []
+        if includingHeader { lines.append(definition.columns.joined(separator: "\t")) }
+        for values in rows(at: indices) {
+            lines.append(definition.columns.indices.map { index in
+                let value = index < values.count ? values[index] : nil
+                return (value ?? "").replacingOccurrences(
+                    of: "[\t\r\n]", with: " ", options: .regularExpression
+                )
+            }.joined(separator: "\t"))
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// The URLs among a selection, for opening them in a browser. Aggregate
+    /// reports have no URL column and yield nothing.
+    public func urls(at indices: IndexSet) -> [String] {
+        indices.sorted().compactMap { url(at: $0) }
+    }
+
     public var query: ReportQuery {
         ReportQuery(definition: definition, sortColumn: sortColumn, direction: direction, filter: filter)
     }
