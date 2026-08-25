@@ -164,6 +164,16 @@ from running out of memory.
 
 Relative URLs resolve against `<base href>` when a page declares one.
 
+Pages are decoded with the encoding they declare, in the order the HTML standard
+gives: a byte order mark, then the `Content-Type` charset, then a `<meta charset>`
+in the first 4 KB, then a guess. A page labelled `iso-8859-1` is read as
+windows-1252, as browsers do, because pages labelled Latin-1 are full of smart
+quotes that Latin-1 has no room for. An unlabelled page is UTF-8 if its bytes are
+valid UTF-8 and windows-1252 otherwise — guessing the other way turns "é" into
+"Ã©" without ever failing. Assuming UTF-8 throughout would put replacement
+characters in every title, description and content hash on a legacy site, and
+report a problem the site does not have.
+
 External links and images are status-checked with HEAD after the internal crawl
 finishes, so a slow third-party host can never starve the crawl of the site you
 asked about. HEAD falls back to GET when a server answers 405 or 501. Neither is

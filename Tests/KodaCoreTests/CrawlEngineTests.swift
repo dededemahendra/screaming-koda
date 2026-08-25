@@ -469,3 +469,48 @@ private func nofollowPaths(inHeader: Bool, directive: String, follow: Bool = fal
     // outlinks pane and the broken-link report both read this table.
     #expect(targets == ["/deep"])
 }
+
+/// Serves raw bytes rather than a Swift string, so the encoding under test is
+/// the one on the wire rather than whatever the source file happened to be.
+private struct LegacyEncodingSite: HTTPClient {
+    let contentType: String
+    let body: Data
+
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
+        .response(HTTPResponse(status: 200, headers: ["Content-Type": contentType],
+                               body: body, elapsedMs: 1))
+    }
+}
+
+private func crawledTitle(contentType: String, page: String, encoding: String.Encoding) async throws -> String? {
+    var config = CrawlConfig(seedURL: "https://legacy.test/")
+    config.checkExternalLinks = false
+    config.checkImages = false
+    let store = try await CrawlSession.start(
+        dbPath: nil, config: config,
+        client: LegacyEncodingSite(contentType: contentType, body: page.data(using: encoding)!),
+        parser: SwiftSoupParser(), onProgress: nil
+    )
+    return try await store.dbQueue.read { db in
+        try String.fetchOne(db, sql: "SELECT title FROM page_facts")
+    }
+}
+
+@Test func aPageInALegacyEncodingKeepsItsAccents() async throws {
+    // Every report downstream reads page_facts. Decoding the body as UTF-8 no
+    // matter what it says turns this title into replacement characters, and the
+    // crawl then reports a problem the site does not have.
+    let page = "<html><head><title>Café Crème</title></head><body>Thé</body></html>"
+
+    #expect(try await crawledTitle(contentType: "text/html; charset=windows-1252",
+                                   page: page, encoding: .windowsCP1252) == "Café Crème")
+    #expect(try await crawledTitle(contentType: "text/html; charset=iso-8859-1",
+                                   page: page, encoding: .isoLatin1) == "Café Crème")
+    #expect(try await crawledTitle(contentType: "text/html", page: page, encoding: .utf8) == "Café Crème",
+            "an unlabelled UTF-8 page is still the common case")
+
+    let declared = "<html><head><meta charset=\"windows-1252\"><title>Café</title></head></html>"
+    #expect(try await crawledTitle(contentType: "text/html", page: declared,
+                                   encoding: .windowsCP1252) == "Café",
+            "the document's own declaration counts when the header is silent")
+}

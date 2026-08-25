@@ -324,7 +324,7 @@ public actor CrawlEngine {
             let isHTML = response.contentType?.contains("html") == true
 
             if isHTML, let body = response.body, !body.isEmpty {
-                let html = String(decoding: body, as: UTF8.self)
+                let html = HTMLDecoder.decode(body, contentTypeHeader: response.header("content-type"))
                 facts = try? parser.parse(html: html)
                 if retainBodies { bodyGz = Gzip.compress(body) }
             }
