@@ -27,10 +27,14 @@ struct CrawlSettingsView: View {
                     .help("How many links from the seed to follow. Blank crawls the whole site.")
 
                     LabeledContent("Stop after") {
-                        TextField("", value: $draft.urlCap, format: .number)
-                            .frame(width: 90)
-                            .multilineTextAlignment(.trailing)
-                        Text("URLs")
+                        // An explicit HStack: LabeledContent stacks a multi-view
+                        // value vertically, which puts the unit under the field.
+                        HStack(spacing: 6) {
+                            TextField("", value: $draft.urlCap, format: .number)
+                                .frame(width: 90)
+                                .multilineTextAlignment(.trailing)
+                            Text("URLs")
+                        }
                     }
 
                     Toggle("Crawl subdomains of the seed host", isOn: $draft.crawlSubdomains)
@@ -56,10 +60,12 @@ struct CrawlSettingsView: View {
                     stepper("Concurrent workers", value: $draft.workers, range: 1...50)
                     stepper("Maximum per host", value: $draft.maxPerHost, range: 1...50)
                     LabeledContent("Request timeout") {
-                        TextField("", value: $draft.timeout, format: .number)
-                            .frame(width: 60)
-                            .multilineTextAlignment(.trailing)
-                        Text("seconds")
+                        HStack(spacing: 6) {
+                            TextField("", value: $draft.timeout, format: .number)
+                                .frame(width: 60)
+                                .multilineTextAlignment(.trailing)
+                            Text("seconds")
+                        }
                     }
                     LabeledContent("User agent") {
                         TextField("", text: $draft.userAgent).frame(width: 240)
@@ -120,10 +126,12 @@ struct CrawlSettingsView: View {
 
     private func stepper(_ title: String, value: Binding<Int>, range: ClosedRange<Int>) -> some View {
         LabeledContent(title) {
-            TextField("", value: value, format: .number)
-                .frame(width: 50)
-                .multilineTextAlignment(.trailing)
-            Stepper("", value: value, in: range).labelsHidden()
+            HStack(spacing: 4) {
+                TextField("", value: value, format: .number)
+                    .frame(width: 50)
+                    .multilineTextAlignment(.trailing)
+                Stepper("", value: value, in: range).labelsHidden()
+            }
         }
     }
 
