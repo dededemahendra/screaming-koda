@@ -20,7 +20,28 @@ public struct ContentView: View {
                 noticeBanner(notice)
                 Divider()
             }
-            NavigationSplitView {
+            // A plain `HStack` with a fixed-width sidebar. Both split views were
+            // tried and both drop half the window, which is measured rather than
+            // guessed — distinct colours in the top 60pt (the bar) against the
+            // body below it:
+            //
+            //   HStack               bar 143   body 130
+            //   NavigationSplitView  bar   3   body 126
+            //   HSplitView           bar 109   body   3
+            //
+            // `NavigationSplitView` expects to be the window's root and lays
+            // itself out against the whole window, so nested under a bar it drew
+            // straight over it and the app shipped with no seed field to type
+            // into. `HSplitView` leaves the bar alone but renders nothing in its
+            // own panes here. The `HStack` is the only arrangement where the
+            // whole window draws.
+            //
+            // The original sidebar complaint was never the container's fault
+            // either: the old frame was `minWidth: 210, idealWidth: 240` with no
+            // maximum, so nothing capped it and it took half the window. A fixed
+            // width is what the design asked for, and it costs a draggable
+            // divider — worth it for a window that renders.
+            HStack(spacing: 0) {
                 IssueSidebar(reports: controller.availableReports,
                              counts: controller.counts,
                              crawlName: controller.crawlHost,
@@ -29,11 +50,10 @@ public struct ContentView: View {
                              onSelect: { report, filter in
                                  controller.select(reportID: report, filterID: filter)
                              })
-                .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
-            } detail: {
+                .frame(width: 260)
+                Divider()
                 Workspace(controller: controller, workspaceView: view)
             }
-            .navigationSplitViewStyle(.balanced)
         }
         .frame(minWidth: 1100, minHeight: 660)
         .sheet(item: Binding(

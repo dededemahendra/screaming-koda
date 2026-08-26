@@ -67,7 +67,6 @@ public struct IssueSidebar: View {
             }
             .listStyle(.sidebar)
         }
-        .searchable(text: $search, placement: .sidebar, prompt: "Filter findings and reports")
         .onAppear { expanded.insert(selectedReportID) }
         .onChange(of: selectedReportID) { _, new in expanded.insert(new) }
     }
@@ -79,6 +78,14 @@ public struct IssueSidebar: View {
                     SidebarModel.findingTotal(reports: reports, counts: counts)))
                 .font(Theme.Numeral.caption)
                 .foregroundStyle(Theme.Ink.quiet.color)
+            // A plain field rather than `.searchable`. That modifier places its
+            // field in a navigation container's own chrome, and this sidebar
+            // does not live in one — so it had nowhere to go and simply never
+            // appeared, leaving a tested narrowing rule with no way to reach it.
+            TextField("Filter findings and reports", text: $search)
+                .textFieldStyle(.roundedBorder)
+                .font(Theme.Face.label)
+                .padding(.top, Theme.Space.tight)
         }
         .padding(.horizontal, Theme.Space.medium)
         .padding(.vertical, Theme.Space.small)

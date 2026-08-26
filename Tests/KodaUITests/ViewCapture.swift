@@ -46,6 +46,28 @@ enum ViewCapture {
     /// could be missed. It cannot miss anti-aliased text or an SF Symbol — which is
     /// what every view asserted through this utility draws — but a view whose only
     /// drawn content is a hairline would need a full scan.
+    /// Distinct colours within one horizontal band, in points from the top.
+    ///
+    /// Whole-view counts cannot answer "did *this part* draw". A window whose
+    /// toolbar is entirely missing still returns a healthy total from the
+    /// sidebar and the workspace below it — which is exactly how a build that
+    /// had no seed field to type into passed every capture assertion on this
+    /// branch.
+    static func distinctColours(_ rep: NSBitmapImageRep, fromTop: Int, height: Int) -> Int {
+        var seen = Set<UInt32>()
+        for y in stride(from: max(0, fromTop), to: min(fromTop + height, rep.pixelsHigh), by: 2) {
+            for x in stride(from: 0, to: rep.pixelsWide, by: 2) {
+                guard let colour = rep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)
+                else { continue }
+                let r = UInt32(colour.redComponent * 255)
+                let g = UInt32(colour.greenComponent * 255)
+                let b = UInt32(colour.blueComponent * 255)
+                seen.insert(r << 16 | g << 8 | b)
+            }
+        }
+        return seen.count
+    }
+
     static func distinctColours(_ rep: NSBitmapImageRep) -> Int {
         var seen = Set<UInt32>()
         for y in stride(from: 0, to: rep.pixelsHigh, by: 2) {
