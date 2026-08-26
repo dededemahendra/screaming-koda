@@ -44,11 +44,25 @@ import Testing
     }
 }
 
-/// The one thing that must never be written through. An invalid pattern is
-/// indistinguishable from one that matched nothing, so an invalid include
-/// pattern would crawl the seed and stop, looking like a broken tool.
-@Test func anInvalidPatternIsNotWrittenThrough() {
-    var config = CrawlConfig(seedURL: "https://example.com/")
-    config.include = ["([unclosed"]
-    #expect(!CrawlSettings.problems(in: config).isEmpty)
+/// The one property this whole task turns on: `configToApply` is the exact
+/// gate `SettingsWindow`'s `.onChange` calls before every write to
+/// `controller.config`. A pattern that will not compile is indistinguishable
+/// from one that matched nothing, so an invalid include pattern reaching the
+/// controller would silently crawl the seed and stop, looking like a broken
+/// tool. Testing `problems(in:)` alone (as this test used to) would miss a
+/// regression where some future binding wrote to `controller.config` without
+/// going through this gate at all.
+@Test func aCandidateWithAPatternThatWillNotCompileIsNeverAppliedThroughTheGate() {
+    var invalidInclude = CrawlConfig(seedURL: "https://example.com/")
+    invalidInclude.include = ["([unclosed"]
+    #expect(CrawlSettings.configToApply(invalidInclude) == nil)
+
+    var invalidExclude = CrawlConfig(seedURL: "https://example.com/")
+    invalidExclude.exclude = ["([unclosed"]
+    #expect(CrawlSettings.configToApply(invalidExclude) == nil)
+
+    var valid = CrawlConfig(seedURL: "https://example.com/")
+    valid.include = ["^/blog/"]
+    let applied = CrawlSettings.configToApply(valid)
+    #expect(applied?.include == ["^/blog/"])
 }

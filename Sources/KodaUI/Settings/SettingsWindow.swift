@@ -8,10 +8,11 @@ import SwiftUI
 /// a regular expression that will not compile. `Store.passesFilters` cannot
 /// tell an invalid pattern from one that matched nothing, so an invalid
 /// include pattern reaching the controller would silently crawl the seed and
-/// stop, looking like a broken tool. `edited` is where that gate lives: text
-/// fields stay as local text while being edited, so a half-typed pattern is
-/// never repeatedly parsed and rejected mid-keystroke, and only a version
-/// that passes `CrawlSettings.problems(in:)` is ever written back.
+/// stop, looking like a broken tool. Text fields stay as local text while
+/// being edited, so a half-typed pattern is never repeatedly parsed and
+/// rejected mid-keystroke, and every write to `controller.config` passes
+/// through `CrawlSettings.configToApply(_:)`, the single choke point that
+/// refuses a candidate carrying an invalid pattern.
 public struct SettingsWindow: View {
     @Bindable var controller: CrawlController
     @State private var pane: SettingsPane
@@ -97,8 +98,8 @@ public struct SettingsWindow: View {
         .disabled(controller.state.isActive)
         .overlay(alignment: .bottom) { problemList }
         .frame(width: 560, height: 460)
-        .onChange(of: edited) { _, new in
-            if problems.isEmpty { controller.config = new }
+        .onChange(of: edited) { _, candidate in
+            if let applied = CrawlSettings.configToApply(candidate) { controller.config = applied }
         }
     }
 
