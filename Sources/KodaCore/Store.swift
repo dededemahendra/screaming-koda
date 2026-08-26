@@ -30,6 +30,13 @@ public final class Store: @unchecked Sendable {
     /// - Parameter path: file path, or nil for an in-memory database (tests).
     public init(path: String?) throws {
         var config = Configuration()
+        // Readers and the writer are separate connections, and often separate
+        // processes: the app browses a database the CLI is still crawling into.
+        // WAL lets them coexist, but only if a connection is willing to wait for
+        // a lock. Without a busy timeout SQLite returns SQLITE_BUSY immediately
+        // and the reader just fails, which defeats the live browsing the whole
+        // design rests on.
+        config.busyMode = .timeout(10)
         config.prepareDatabase { db in
             // SQLite has no popcount, and near-duplicate detection needs one to
             // turn two fingerprints into a distance. Registered per connection,
