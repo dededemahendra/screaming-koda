@@ -4,7 +4,6 @@ import SwiftUI
 
 public struct ContentView: View {
     @State private var controller: CrawlController
-    @State private var showingSettings = false
     @State private var view: WorkspaceView = .table
 
     public init(controller: CrawlController = CrawlController()) {
@@ -14,7 +13,6 @@ public struct ContentView: View {
     public var body: some View {
         VStack(spacing: 0) {
             CrawlToolbar(controller: controller,
-                         showingSettings: $showingSettings,
                          workspaceView: $view,
                          onExport: { scope, format in export(scope: scope, format: format) })
             Divider()
@@ -38,11 +36,6 @@ public struct ContentView: View {
             .navigationSplitViewStyle(.balanced)
         }
         .frame(minWidth: 1100, minHeight: 660)
-        .sheet(isPresented: $showingSettings) {
-            ConfigSheet(config: controller.config,
-                        onApply: { controller.config = $0; showingSettings = false },
-                        onCancel: { showingSettings = false })
-        }
         .sheet(item: Binding(
             get: { controller.pendingExistingCrawl },
             set: { if $0 == nil { controller.cancelPending() } }

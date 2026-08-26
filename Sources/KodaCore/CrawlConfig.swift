@@ -83,7 +83,7 @@ public enum ExtractionValue: String, Codable, Sendable, CaseIterable {
     }
 }
 
-public struct CrawlConfig: Codable, Sendable {
+public struct CrawlConfig: Codable, Sendable, Equatable {
     public var seedURL: String
     public var workers: Int = 5
     /// Deliberately below `workers`: batch size is `max(workers, 1)` and

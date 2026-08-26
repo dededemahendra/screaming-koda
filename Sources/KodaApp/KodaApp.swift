@@ -37,6 +37,10 @@ struct KodaApp: App {
             ContentView(controller: controller)
         }
         .defaultSize(width: 1100, height: 650)
+
+        Settings {
+            SettingsWindow(controller: controller)
+        }
     }
 }
 

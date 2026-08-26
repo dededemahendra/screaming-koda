@@ -36,16 +36,14 @@ public enum WorkspaceView: String, CaseIterable, Identifiable, Sendable {
 
 public struct CrawlToolbar: View {
     @Bindable private var controller: CrawlController
-    @Binding private var showingSettings: Bool
     @Binding private var workspaceView: WorkspaceView
     private let onExport: (ExportScope, ExportFormat) -> Void
     @FocusState private var seedFocused: Bool
 
-    public init(controller: CrawlController, showingSettings: Binding<Bool>,
+    public init(controller: CrawlController,
                 workspaceView: Binding<WorkspaceView>,
                 onExport: @escaping (ExportScope, ExportFormat) -> Void) {
         self.controller = controller
-        _showingSettings = showingSettings
         _workspaceView = workspaceView
         self.onExport = onExport
     }
@@ -79,15 +77,10 @@ public struct CrawlToolbar: View {
             Spacer()
             statusText.foregroundStyle(.secondary).font(Theme.Numeral.label)
 
-            Button {
-                showingSettings = true
-            } label: {
+            SettingsLink {
                 Image(systemName: "slider.horizontal.3")
             }
             .help("Crawl settings")
-            // Changing the configuration mid-crawl would apply to nothing that
-            // is already running and silently to whatever is not, so it waits.
-            .disabled(controller.state.isActive)
 
             Picker("", selection: $workspaceView) {
                 ForEach(WorkspaceView.allCases) { mode in

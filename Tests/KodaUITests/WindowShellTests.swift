@@ -7,7 +7,6 @@ import Testing
 @Test func theToolbarDrawsItsControls() {
     let controller = CrawlController(dbPath: nil)
     let toolbar = CrawlToolbar(controller: controller,
-                               showingSettings: .constant(false),
                                workspaceView: .constant(.table),
                                onExport: { _, _ in })
     ViewCapture.expectNotBlank(toolbar.frame(width: 1100, height: 52),
