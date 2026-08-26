@@ -85,6 +85,12 @@ public struct ContentView: View {
     /// Runs the export off the main actor, since a whole-crawl export at half a
     /// million URLs is real work, and reports any failure through the same
     /// notice banner everything else uses.
+    ///
+    /// The save panel and the plan capture stay on the main actor — the panel
+    /// because `NSSavePanel` demands it, the capture because it only reads
+    /// `CrawlController`'s main-actor state. The queries and the file write
+    /// happen in `ExportPlan.run`, off the main actor, which is the part that
+    /// is actually slow at half a million URLs.
     private func export(scope: ExportScope, format: ExportFormat) {
         let host = controller.crawlHost
         let reportName = scope == .currentView ? controller.selectedReport.name : nil
@@ -100,21 +106,35 @@ public struct ContentView: View {
         panel.prompt = "Export"
         guard panel.runModal() == .OK, let destination = panel.url else { return }
 
-        do {
-            let exports: [ReportExport] = try scope == .currentView
-                ? [controller.exportCurrentView()].compactMap { $0 }
-                : controller.exportEverything()
-            guard !exports.isEmpty else {
-                controller.report("Nothing to export yet.")
-                return
+        guard let plan = controller.exportPlan(scope: scope) else {
+            controller.report("Nothing to export yet.")
+            return
+        }
+
+        // Re-entrancy guard: once the work below is off the main actor, nothing
+        // else stops the user opening the menu again mid-export, against the
+        // same store and possibly the same destination.
+        controller.isExporting = true
+        let controller = self.controller
+        Task.detached(priority: .userInitiated) {
+            do {
+                let written = try plan.run(format: format, to: destination, host: host, date: Date())
+                await MainActor.run {
+                    controller.isExporting = false
+                    guard !written.isEmpty else {
+                        controller.report("Nothing to export yet.")
+                        return
+                    }
+                    controller.report(written.count == 1
+                        ? "Exported to \(written[0].path)."
+                        : "Exported \(written.count) files to \(destination.path).")
+                }
+            } catch {
+                await MainActor.run {
+                    controller.isExporting = false
+                    controller.report("Export failed: \(error.localizedDescription)")
+                }
             }
-            let written = try ExportCommands.write(exports, format: format, to: destination,
-                                                   host: host, date: Date())
-            controller.report(written.count == 1
-                ? "Exported to \(written[0].path)."
-                : "Exported \(written.count) files to \(destination.path).")
-        } catch {
-            controller.report("Export failed: \(error.localizedDescription)")
         }
     }
 

@@ -18,6 +18,14 @@ public enum ToolbarAction: Hashable, Sendable {
     }
 }
 
+/// Whether the export menu should be enabled: there is something to export,
+/// and no export is already running against it. Pulled out of the view body
+/// so the rule — in particular, that a second export cannot start while the
+/// first is still writing — is testable without rendering the toolbar.
+func exportIsAvailable(canExport: Bool, isExporting: Bool) -> Bool {
+    canExport && !isExporting
+}
+
 /// How the workspace shows a crawl. The table answers "which pages", the tree
 /// answers "what is this site made of", and the graph answers "how does it hang
 /// together" — three different questions rather than three skins.
@@ -104,7 +112,7 @@ public struct CrawlToolbar: View {
             .menuIndicator(.hidden)
             .frame(width: 44)
             .help("Export")
-            .disabled(!controller.canExport)
+            .disabled(!exportIsAvailable(canExport: controller.canExport, isExporting: controller.isExporting))
         }
         .padding(Theme.Space.small)
     }

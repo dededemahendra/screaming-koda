@@ -89,6 +89,13 @@ public final class CrawlController {
     /// other.
     public private(set) var siteTree: SiteTreeNode?
     public private(set) var linkGraph: CrawlGraph?
+    /// Set while a captured `ExportPlan` is running off the main actor. Moving
+    /// the export's work off the main actor makes it re-entrant — without this,
+    /// nothing stops a second export starting against the same store, possibly
+    /// the same destination, while the first is still writing. `ContentView`
+    /// sets this directly around its `Task.detached` export work, so the
+    /// setter only needs to be visible within this module, not outside it.
+    public internal(set) var isExporting = false
 
     /// Every tab: the built-in reports followed by any custom ones that
     /// compiled. A definition that produced nothing usable is left out rather
@@ -387,18 +394,21 @@ public final class CrawlController {
     /// Loads the inspector for a row. A failed read empties the panes rather
     /// than leaving the previous URL's inlinks on screen under a new heading,
     /// which would be actively misleading.
-    /// Builds the export for the view currently on screen — the same report,
-    /// filter, and sort the user is looking at. Exporting something other than
-    /// what they can see is a support burden.
-    public func exportCurrentView() throws -> ReportExport? {
-        guard let store, let index = rowIndex else { return nil }
-        return try store.export(report: index.report, filter: index.filter,
-                                sortBy: index.sortColumn, ascending: index.ascending)
-    }
-
-    public func exportEverything() throws -> [ReportExport] {
-        guard let store else { return [] }
-        return try store.exportAll(reports: availableReports)
+    /// Captures what an export of `scope` would need — for `.currentView`, the
+    /// same report, filter and sort the user is looking at, resolved from
+    /// `rowIndex`; for `.everything`, every available report. Cheap: it only
+    /// reads main-actor state, none of the store queries or file writing that
+    /// `ExportPlan.run` does. nil when there is no crawl to export.
+    public func exportPlan(scope: ExportScope) -> ExportPlan? {
+        guard let store else { return nil }
+        switch scope {
+        case .currentView:
+            guard let index = rowIndex else { return nil }
+            return ExportPlan(store: store, report: index.report, filter: index.filter,
+                              sortColumn: index.sortColumn, ascending: index.ascending)
+        case .everything:
+            return ExportPlan(store: store, reports: availableReports)
+        }
     }
 
     /// Whether there is anything to export yet.
