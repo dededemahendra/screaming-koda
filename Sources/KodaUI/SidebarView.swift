@@ -37,7 +37,6 @@ public struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
-        .frame(minWidth: 210, idealWidth: 240)
     }
 
     private func row(_ report: Report, _ filter: ReportFilter) -> some View {
