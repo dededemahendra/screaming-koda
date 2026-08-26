@@ -85,6 +85,21 @@ public enum SidebarModel {
         return total
     }
 
+    /// The sidebar header's second line.
+    ///
+    /// Formatting goes through `.formatted()` so the grouping separator is the
+    /// reader's, not the author's. This is worth stating because it looked like
+    /// a bug during design: the URL cap read "500.000", which is correct
+    /// grouping in en_ID and reads as five hundred to anyone expecting en_AU.
+    /// Hand-rolling a separator would make it genuinely wrong everywhere else.
+    public static func findingSummary(_ total: Int) -> String {
+        switch total {
+        case 0: return "No findings"
+        case 1: return "1 finding"
+        default: return "\(total.formatted()) findings"
+        }
+    }
+
     private static func item(_ report: Report, _ filter: ReportFilter,
                              _ count: Int?) -> SidebarItem {
         SidebarItem(reportID: report.id, filterID: filter.id,

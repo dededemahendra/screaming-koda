@@ -23,13 +23,14 @@ public struct ContentView: View {
                 Divider()
             }
             NavigationSplitView {
-                SidebarView(reports: controller.availableReports,
-                            counts: controller.counts,
-                            selectedReportID: controller.selectedReportID,
-                            selectedFilterID: controller.selectedFilterID,
-                            onSelect: { report, filter in
-                                controller.select(reportID: report, filterID: filter)
-                            })
+                IssueSidebar(reports: controller.availableReports,
+                             counts: controller.counts,
+                             crawlName: controller.crawlHost,
+                             selectedReportID: controller.selectedReportID,
+                             selectedFilterID: controller.selectedFilterID,
+                             onSelect: { report, filter in
+                                 controller.select(reportID: report, filterID: filter)
+                             })
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
             } detail: {
                 Workspace(controller: controller, workspaceView: view)

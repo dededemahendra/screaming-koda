@@ -133,3 +133,26 @@ private let counts = [
 @Test func theFindingTotalIgnoresNavigationFilters() {
     #expect(SidebarModel.findingTotal(reports: sample, counts: ["codes.all": 999]) == 0)
 }
+
+/// Every tie above is within one report, so the report-name tier of
+/// `worstFirst` — the middle step between count and filter name — has never
+/// actually run. This ties a filter from `codes` against one appended to a
+/// copy of `urls`, on a count neither report's existing filters share, so the
+/// two can only be ordered by comparing "Response Codes" against "URL
+/// Structure". The filter names are chosen to sort the opposite way, so a
+/// version that fell straight through to the filter-name tiebreak would
+/// order these two the wrong way round rather than passing by accident.
+@Test func tiedCountsAcrossReportsFallBackToReportName() {
+    let crossReport = sample.map { report -> Report in
+        guard report.id == "urls" else { return report }
+        return Report(id: report.id, name: report.name, predicate: report.predicate,
+                      columns: report.columns,
+                      filters: report.filters + [
+                          ReportFilter(id: "brokenChain", name: "Broken redirect chain",
+                                       predicate: "1", severity: .breaksIndexing),
+                      ])
+    }
+    let tied = ["codes.gone": 5, "urls.brokenChain": 5]
+    let bands = SidebarModel.bands(reports: crossReport, counts: tied)
+    #expect(bands[0].items.map(\.reportName) == ["Response Codes", "URL Structure"])
+}
