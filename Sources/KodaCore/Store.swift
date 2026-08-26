@@ -21,12 +21,20 @@ public final class Store: @unchecked Sendable {
           SELECT src_url_id FROM images
           WHERE src_url_id NOT IN (SELECT to_url_id FROM links)
         )
+        AND u.id NOT IN (
+          SELECT src_url_id FROM resources
+          WHERE src_url_id NOT IN (SELECT to_url_id FROM links)
+        )
         """
 
     /// - Parameter path: file path, or nil for an in-memory database (tests).
     public init(path: String?) throws {
         var config = Configuration()
         config.prepareDatabase { db in
+            // SQLite has no popcount, and near-duplicate detection needs one to
+            // turn two fingerprints into a distance. Registered per connection,
+            // which is what prepareDatabase is for.
+            db.add(function: Self.hammingDistance())
             try db.execute(sql: "PRAGMA journal_mode=WAL")
             try db.execute(sql: "PRAGMA foreign_keys=ON")
             try db.execute(sql: "PRAGMA synchronous=NORMAL")
@@ -35,6 +43,21 @@ public final class Store: @unchecked Sendable {
             dbQueue = try DatabaseQueue(path: path, configuration: config)
         } else {
             dbQueue = try DatabaseQueue(configuration: config)
+        }
+    }
+
+    /// `koda_hamming(a, b)` — bits differing between two simhash fingerprints.
+    ///
+    /// Built per call rather than shared: `DatabaseFunction` is not `Sendable`,
+    /// and registration happens once per connection, so there is nothing to gain
+    /// from a shared instance and a concurrency error to avoid.
+    static func hammingDistance() -> DatabaseFunction {
+        DatabaseFunction(
+        "koda_hamming", argumentCount: 2, pure: true
+        ) { values in
+            guard let a = Int64.fromDatabaseValue(values[0]),
+                  let b = Int64.fromDatabaseValue(values[1]) else { return nil }
+            return SimHash.distance(a, b)
         }
     }
 
@@ -136,11 +159,173 @@ public final class Store: @unchecked Sendable {
                 CREATE INDEX idx_urls_url ON urls(url);
                 """)
         }
+        m.registerMigration("v4-canonical-count-and-h2") { db in
+            // Both close gaps that made a page look clean when it was not: a
+            // page declaring two canonicals was indistinguishable from one
+            // declaring a single canonical, and H2s could be counted but never
+            // compared or measured.
+            try db.execute(sql: """
+                ALTER TABLE page_facts ADD COLUMN canonical_count INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE page_facts ADD COLUMN h2 TEXT;
+                CREATE INDEX idx_facts_h2 ON page_facts(h2);
+                """)
+        }
+        m.registerMigration("v5-headers-social-and-structured-data") { db in
+            // Storing headers wholesale rather than picking out one more named
+            // column each time: security headers, custom header extraction and
+            // plain header inspection are all the same need, and a JSON blob
+            // serves all three without a migration per header.
+            try db.execute(sql: """
+                ALTER TABLE responses ADD COLUMN headers_json TEXT;
+
+                ALTER TABLE page_facts ADD COLUMN og_title TEXT;
+                ALTER TABLE page_facts ADD COLUMN og_description TEXT;
+                ALTER TABLE page_facts ADD COLUMN og_image TEXT;
+                ALTER TABLE page_facts ADD COLUMN og_type TEXT;
+                ALTER TABLE page_facts ADD COLUMN twitter_card TEXT;
+                ALTER TABLE page_facts ADD COLUMN twitter_title TEXT;
+                ALTER TABLE page_facts ADD COLUMN twitter_image TEXT;
+                ALTER TABLE page_facts ADD COLUMN amphtml TEXT;
+                ALTER TABLE page_facts ADD COLUMN rel_prev TEXT;
+                ALTER TABLE page_facts ADD COLUMN rel_next TEXT;
+                ALTER TABLE page_facts ADD COLUMN analytics TEXT;
+
+                -- A page can declare many schema types, so this is a table
+                -- rather than a column. Indexed on type so "every page with
+                -- Product markup" is a lookup, not a scan.
+                CREATE TABLE structured_data (
+                  url_id INTEGER NOT NULL REFERENCES urls(id),
+                  format TEXT NOT NULL,
+                  type TEXT NOT NULL
+                );
+                CREATE INDEX idx_sd_url ON structured_data(url_id);
+                CREATE INDEX idx_sd_type ON structured_data(type);
+
+                ALTER TABLE images ADD COLUMN width INTEGER;
+                ALTER TABLE images ADD COLUMN height INTEGER;
+                """)
+        }
+        m.registerMigration("v6-extractions") { db in
+            try db.execute(sql: """
+                CREATE TABLE extractions (
+                  url_id INTEGER NOT NULL REFERENCES urls(id),
+                  name TEXT NOT NULL,
+                  value TEXT NOT NULL,
+                  position INTEGER NOT NULL
+                );
+                CREATE INDEX idx_extractions_url ON extractions(url_id);
+                CREATE INDEX idx_extractions_name ON extractions(name);
+                """)
+        }
+        m.registerMigration("v7-sitemaps") { db in
+            // Which URLs a sitemap declared, independent of whether the crawl
+            // reached them. This is what makes "in the sitemap but not linked"
+            // — the only honest orphan signal a crawler has — expressible.
+            try db.execute(sql: """
+                ALTER TABLE urls ADD COLUMN in_sitemap INTEGER NOT NULL DEFAULT 0;
+                CREATE INDEX idx_urls_sitemap ON urls(in_sitemap);
+                """)
+        }
+        m.registerMigration("v8-resources") { db in
+            try db.execute(sql: """
+                CREATE TABLE resources (
+                  url_id INTEGER NOT NULL REFERENCES urls(id),
+                  src_url_id INTEGER NOT NULL REFERENCES urls(id),
+                  kind TEXT NOT NULL
+                );
+                CREATE INDEX idx_resources_url ON resources(url_id);
+                CREATE INDEX idx_resources_src ON resources(src_url_id);
+                """)
+        }
+        m.registerMigration("v9-rendering") { db in
+            try db.execute(sql: """
+                ALTER TABLE responses ADD COLUMN rendered INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE responses ADD COLUMN render_ms INTEGER;
+                ALTER TABLE responses ADD COLUMN js_errors TEXT;
+                -- How much of the page only exists after scripts run. The single
+                -- most useful number a rendered crawl produces: it says whether
+                -- rendering this site is necessary or merely expensive.
+                ALTER TABLE responses ADD COLUMN rendered_words INTEGER;
+                ALTER TABLE responses ADD COLUMN static_words INTEGER;
+                """)
+        }
+        m.registerMigration("v10-performance") { db in
+            // Only what WebKit can actually observe. There is deliberately no
+            // CLS or INP column: `supportedEntryTypes` has no "layout-shift",
+            // and INP needs a real interaction a crawler never makes. A column
+            // that could only ever hold zero would read as a passing grade.
+            try db.execute(sql: """
+                ALTER TABLE responses ADD COLUMN perf_ttfb_ms INTEGER;
+                ALTER TABLE responses ADD COLUMN perf_fcp_ms INTEGER;
+                ALTER TABLE responses ADD COLUMN perf_lcp_ms INTEGER;
+                ALTER TABLE responses ADD COLUMN perf_dcl_ms INTEGER;
+                ALTER TABLE responses ADD COLUMN perf_load_ms INTEGER;
+                ALTER TABLE responses ADD COLUMN perf_resources INTEGER;
+                """)
+        }
+        m.registerMigration("v11-skip-reasons-and-text") { db in
+            try db.execute(sql: """
+                -- Why a URL was recorded but never crawled. Previously the state
+                -- said "skipped" and nothing said why, so a crawl that quietly
+                -- stopped short was indistinguishable from one that finished.
+                ALTER TABLE urls ADD COLUMN skip_reason TEXT;
+                -- Characters of visible text, so the text-to-HTML ratio is a real
+                -- measurement rather than word count divided by byte count.
+                ALTER TABLE page_facts ADD COLUMN text_length INTEGER;
+                """)
+        }
+        m.registerMigration("v12-serp-widths") { db in
+            // Stored rather than computed at query time: measuring text needs a
+            // font engine, which SQL has no access to, and a report filter has
+            // to be expressible as a predicate.
+            try db.execute(sql: """
+                ALTER TABLE page_facts ADD COLUMN title_pixels INTEGER;
+                ALTER TABLE page_facts ADD COLUMN meta_description_pixels INTEGER;
+                """)
+        }
+        m.registerMigration("v13-simhash") { db in
+            try db.execute(sql: """
+                ALTER TABLE page_facts ADD COLUMN simhash INTEGER;
+
+                -- Bands live in their own table rather than as one column each:
+                -- the band count is tied to the near-duplicate threshold and has
+                -- to be free to change without a migration per band, and one
+                -- composite index serves all of them.
+                CREATE TABLE simhash_bands (
+                  url_id INTEGER NOT NULL REFERENCES urls(id),
+                  band INTEGER NOT NULL,
+                  value INTEGER NOT NULL
+                );
+                CREATE INDEX idx_simhash_lookup ON simhash_bands(band, value);
+                CREATE INDEX idx_simhash_url ON simhash_bands(url_id);
+                """)
+        }
+        m.registerMigration("v14-external-metrics") { db in
+            // One table for every provider: a URL, where the number came from,
+            // what it is, and its value. Adding a provider is then a new
+            // MetricsProvider rather than a migration.
+            try db.execute(sql: """
+                CREATE TABLE external_metrics (
+                  url_id INTEGER NOT NULL REFERENCES urls(id),
+                  source TEXT NOT NULL,
+                  metric TEXT NOT NULL,
+                  value REAL,
+                  text TEXT,
+                  PRIMARY KEY (url_id, source, metric)
+                ) WITHOUT ROWID;
+                CREATE INDEX idx_metrics_source ON external_metrics(source, metric);
+                """)
+        }
         return m
     }
 
     public func initializeCrawl(config: CrawlConfig, startedAt: Date) throws {
         let json = String(data: try JSONEncoder().encode(config), encoding: .utf8) ?? "{}"
+        // Stored normalised so it can be compared against `urls.url`, which is
+        // always normalised. The Sitemap report needs exactly that comparison to
+        // tell an orphan from the page the crawl started on.
+        let seed = URLNormalizer.normalize(config.seedURL, relativeTo: nil)?.absoluteString
+            ?? config.seedURL
         try dbQueue.write { db in
             try db.execute(
                 sql: """
@@ -148,7 +333,7 @@ public final class Store: @unchecked Sendable {
                     VALUES (1, ?, ?, ?, 1)
                     ON CONFLICT(id) DO UPDATE SET seed_url=excluded.seed_url, config_json=excluded.config_json
                     """,
-                arguments: [config.seedURL, startedAt.timeIntervalSince1970, json]
+                arguments: [seed, startedAt.timeIntervalSince1970, json]
             )
         }
     }

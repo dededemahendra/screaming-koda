@@ -1,4 +1,5 @@
 import AppKit
+import KodaRender
 import KodaUI
 import SwiftUI
 
@@ -9,7 +10,14 @@ struct KodaApp: App {
 
     init() {
         let controller = CrawlController(
-            crawlsDirectory: { CrawlDatabaseLocation.crawlsDirectory() }
+            crawlsDirectory: { CrawlDatabaseLocation.crawlsDirectory() },
+            // Only the shipped app persists settings; a bare controller keeps
+            // them in memory so tests never read or write real preferences.
+            settings: CrawlSettings(),
+            makeRenderer: { config in
+                WebKitRenderer(poolSize: config.renderConcurrency, mobile: config.mobile,
+                               userAgent: config.effectiveUserAgent)
+            }
         )
         _controller = State(initialValue: controller)
         // Wired up here, in `init`, rather than in an `.onAppear` inside `body`: this
@@ -29,6 +37,10 @@ struct KodaApp: App {
             ContentView(controller: controller)
         }
         .defaultSize(width: 1100, height: 650)
+
+        Settings {
+            SettingsWindow(controller: controller)
+        }
     }
 }
 

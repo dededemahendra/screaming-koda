@@ -33,8 +33,24 @@ public final class CrawlController {
     /// rebuilds) so a large crawl still spends nearly all of its live-refresh
     /// time on the cheap append, not a full re-sort.
     static let liveFullRebuildInterval: TimeInterval = 5
+    /// How often the sidebar's issue counts are recomputed during a crawl.
+    ///
+    /// Slower than everything else on purpose. Counts are one conditional-
+    /// aggregation scan over every URL in the crawl, so at 500,000 rows doing it
+    /// on every 2 Hz tick would spend the machine's time counting rather than
+    /// crawling. The table is what the user is watching; a count two seconds
+    /// stale is not a defect. Counts are refreshed unconditionally once the
+    /// crawl stops, so the final numbers are never a stale sample.
+    static let countsRefreshInterval: TimeInterval = 2
 
     public var seedURL: String = ""
+    /// The crawl configuration the settings sheet edits. Persisted only when the
+    /// controller was given a `CrawlSettings`; a bare controller keeps it in
+    /// memory, which is what keeps tests from reading or writing real
+    /// preferences.
+    public var config: CrawlConfig {
+        didSet { settings?.config = config }
+    }
 
     public private(set) var state: CrawlState = .idle
     public private(set) var progress: CrawlProgress?
@@ -45,6 +61,50 @@ public final class CrawlController {
     public private(set) var rows: RowStore?
     /// Bumped on every tick so the table knows to reload.
     public private(set) var revision = 0
+
+    /// Which tab and filter the table is showing. Held as ids rather than as
+    /// values so selection survives `Reports.all` being rebuilt.
+    public private(set) var selectedReportID: String = Reports.internalURLs.id
+    public private(set) var selectedFilterID: String = Reports.internalURLs.defaultFilter.id
+    /// Row counts keyed "reportID.filterID", for the sidebar.
+    public private(set) var counts: [String: Int] = [:]
+    public private(set) var rate = CrawlRate()
+    /// The deepest level reached so far. Refreshed alongside the sidebar
+    /// counts by `refreshCounts`, which reads `store.summary()` for this —
+    /// that read was added for this purpose, not an existing one this
+    /// piggybacks on.
+    public private(set) var depthReached: Int?
+    /// The row the inspector is describing, or nil when nothing is selected.
+    public private(set) var selectedRowID: Int64?
+    /// The inspector's four panes, loaded together when the selection changes.
+    /// Loading on selection rather than on every tick keeps four extra queries
+    /// off the crawl's refresh path.
+    public private(set) var detail: URLDetail?
+    public private(set) var inlinks: InspectorRows<LinkRow>?
+    public private(set) var outlinks: InspectorRows<LinkRow>?
+    public private(set) var images: InspectorRows<ImageRow>?
+    public private(set) var redirectChain: [RedirectHop] = []
+    /// The site's shape. Recomputed with the counts rather than on every tick:
+    /// both walk the whole crawl, and neither needs to be more current than the
+    /// other.
+    public private(set) var siteTree: SiteTreeNode?
+    public private(set) var linkGraph: CrawlGraph?
+
+    /// Every tab: the built-in reports followed by any custom ones that
+    /// compiled. A definition that produced nothing usable is left out rather
+    /// than shown as an empty tab.
+    public var availableReports: [Report] {
+        Reports.all + (settings?.customReports ?? []).compactMap(CustomReports.compile)
+    }
+
+    public var selectedReport: Report {
+        availableReports.first { $0.id == selectedReportID } ?? Reports.internalURLs
+    }
+
+    public var selectedFilter: ReportFilter {
+        let report = selectedReport
+        return report.filters.first { $0.id == selectedFilterID } ?? report.defaultFilter
+    }
 
     /// Set when Start found an existing crawl for this host and is waiting for
     /// the user to choose. The window presents a sheet; nothing happens until
@@ -57,7 +117,17 @@ public final class CrawlController {
     /// Where crawl databases live. When nil the controller stays in-memory,
     /// which is what every existing test relies on.
     @ObservationIgnored private let crawlsDirectory: (@MainActor @Sendable () -> URL)?
+    @ObservationIgnored private let settings: CrawlSettings?
+    /// Injected by the app, which owns the WebKit dependency. A bare controller
+    /// has none, so rendering is simply unavailable in tests that do not ask.
+    @ObservationIgnored private let makeRenderer: (@Sendable (CrawlConfig) -> PageRenderer)?
     @ObservationIgnored private var engine: CrawlEngine?
+    /// Kept so the sidebar counts and the inspector can query after the crawl
+    /// task has finished with it. Internal rather than private so tests can
+    /// change the database behind the controller's back and prove a refresh
+    /// really did (or did not) re-run — a throttle test that cannot observe the
+    /// underlying data can only ever assert that nothing changed.
+    @ObservationIgnored private(set) var store: Store?
     /// Backs `rows`. `RowStore` only fetches by id now (Task 6) — this is what
     /// actually notices new rows a live crawl has added; `rows?.refresh()`
     /// alone no longer does, since it only drops the page cache.
@@ -69,6 +139,8 @@ public final class CrawlController {
     /// Last periodic full rebuild under the default sort; throttled by
     /// `liveFullRebuildInterval`.
     @ObservationIgnored private var lastFullRebuild = Date.distantPast
+    /// Last sidebar count refresh; throttled by `countsRefreshInterval`.
+    @ObservationIgnored private var lastCountsRefresh = Date.distantPast
     /// Tracks whether the robots-unreachable notice was already shown this run,
     /// independent of whatever else `notice` may also contain (such as a
     /// "database replaced" message set earlier in `start()`) — the emptiness
@@ -91,12 +163,17 @@ public final class CrawlController {
         client: HTTPClient = URLSessionHTTPClient(),
         parser: PageParser = SwiftSoupParser(),
         dbPath: String? = nil,
-        crawlsDirectory: (@MainActor @Sendable () -> URL)? = nil
+        crawlsDirectory: (@MainActor @Sendable () -> URL)? = nil,
+        settings: CrawlSettings? = nil,
+        makeRenderer: (@Sendable (CrawlConfig) -> PageRenderer)? = nil
     ) {
         self.client = client
         self.parser = parser
         self.dbPath = dbPath
         self.crawlsDirectory = crawlsDirectory
+        self.settings = settings
+        self.makeRenderer = makeRenderer
+        self.config = settings?.config ?? CrawlSettings.clamped(CrawlConfig(seedURL: ""))
     }
 
     public func start() async {
@@ -106,6 +183,17 @@ public final class CrawlController {
 
         guard let host = CrawlConfig(seedURL: seedURL).seedHost else {
             notice = "Cannot start: \(seedURL) is not a crawlable http(s) URL."
+            state = .idle
+            return
+        }
+
+        // Checked here rather than inside the crawl, because `Store.passesFilters`
+        // cannot tell an invalid pattern from one that did not match: an invalid
+        // include pattern would crawl the seed and stop, looking like a broken
+        // tool rather than a bad setting.
+        let problems = CrawlSettings.problems(in: config)
+        guard problems.isEmpty else {
+            notice = "Cannot start:\n" + problems.map { "• " + $0 }.joined(separator: "\n")
             state = .idle
             return
         }
@@ -166,18 +254,28 @@ public final class CrawlController {
     private func beginCrawl(dbPath: String?) async {
         robotsUnreachableNoticeShown = false
 
-        var config = CrawlConfig(seedURL: seedURL)
-        config.workers = 5
+        var config = CrawlSettings.clamped(self.config)
+        config.seedURL = seedURL
 
-        let prepared: (engine: CrawlEngine, store: Store, robotsOutcome: RobotsFetchOutcome)
+        let prepared: (engine: CrawlEngine, store: Store, robotsOutcome: RobotsFetchOutcome,
+                       sitemap: SitemapOutcome)
         do {
             prepared = try await CrawlSession.prepare(
-                dbPath: dbPath, config: config, client: client, parser: parser
+                dbPath: dbPath, config: config, client: client, parser: parser,
+                renderer: config.renderJavaScript ? makeRenderer?(config) : nil
             )
         } catch {
             notice = "Cannot start: \(error)"
             state = .idle
             return
+        }
+
+        // A crawl seeded from a sitemap that turned out to be unreachable looks
+        // identical to one that simply found nothing, so say which it was.
+        if !prepared.sitemap.failed.isEmpty {
+            notice = appendNotice(notice, "\(prepared.sitemap.failed.count) sitemap(s) could not be "
+                + "read: " + prepared.sitemap.failed.prefix(3).joined(separator: ", ")
+                + (prepared.sitemap.failed.count > 3 ? ", and others." : "."))
         }
 
         if case .unreachable(let reason) = prepared.robotsOutcome {
@@ -188,10 +286,15 @@ public final class CrawlController {
         }
 
         engine = prepared.engine
-        let freshIndex = RowIndex(store: prepared.store)
-        freshIndex.rebuild(sort: .discoveryOrder, ascending: true)
+        store = prepared.store
+        selectRow(id: nil)
+        let freshIndex = RowIndex(store: prepared.store, report: selectedReport)
+        freshIndex.rebuild(report: selectedReport, filter: selectedFilter,
+                           sortColumnID: nil, ascending: true)
         rowIndex = freshIndex
         rows = RowStore(store: prepared.store, index: freshIndex)
+        rate.reset()
+        refreshCounts(force: true)
         state = .running
 
         let engine = prepared.engine
@@ -221,10 +324,9 @@ public final class CrawlController {
                 // sort, any row added since the last throttled rebuild.
                 // Performance no longer matters once the crawl has stopped, so
                 // there is no reason to take the cheap-but-incomplete path here.
-                if let index = self.rowIndex {
-                    index.rebuild(sort: index.sort, ascending: index.ascending)
-                }
+                self.rowIndex?.rebuild()
                 self.rows?.refresh()
+                self.refreshCounts(force: true)
                 self.revision &+= 1
                 self.explainEmptyCrawlIfNeeded(store: store)
                 self.stopTicking()
@@ -237,12 +339,14 @@ public final class CrawlController {
         guard state == .running, let engine else { return }
         await engine.pause()
         state = await engine.state
+        rate.reset()
     }
 
     public func resume() async {
         guard state == .paused, let engine else { return }
         await engine.resume()
         state = await engine.state
+        rate.reset()
     }
 
     public func stop() async {
@@ -252,13 +356,101 @@ public final class CrawlController {
 
     /// Rebuilds the index under a newly chosen sort and reloads. Called from a
     /// column header click; the coordinator resolves which column and
-    /// direction, this is where it's actually applied.
-    public func applySort(_ column: SortColumn, ascending: Bool) {
+    /// direction, this is where it's actually applied. An id the current report
+    /// does not declare is ignored by `RowIndex`, so it cannot reach the SQL.
+    public func applySort(columnID: String, ascending: Bool) {
         guard let index = rowIndex else { return }
-        index.rebuild(sort: column, ascending: ascending)
+        index.rebuild(report: index.report, filter: index.filter,
+                      sortColumnID: columnID, ascending: ascending)
         lastSortRebuild = Date()
         rows?.refresh()
         revision &+= 1
+    }
+
+    /// Switches tab or filter. Clears the selection, because row 4 of Titles is
+    /// not row 4 of Images and carrying the index over would silently point the
+    /// inspector at an unrelated URL. An unknown id is ignored rather than
+    /// crashing — the sidebar is the only caller, but it is a public entry point.
+    public func select(reportID: String, filterID: String? = nil) {
+        guard let report = availableReports.first(where: { $0.id == reportID }) else { return }
+        let filter = filterID.flatMap { id in report.filters.first { $0.id == id } }
+            ?? report.defaultFilter
+        selectedReportID = report.id
+        selectedFilterID = filter.id
+        selectRow(id: nil)
+        rowIndex?.rebuild(report: report, filter: filter, sortColumnID: nil, ascending: true)
+        lastSortRebuild = Date()
+        rows?.refresh()
+        revision &+= 1
+    }
+
+    /// Loads the inspector for a row. A failed read empties the panes rather
+    /// than leaving the previous URL's inlinks on screen under a new heading,
+    /// which would be actively misleading.
+    /// Builds the export for the view currently on screen — the same report,
+    /// filter, and sort the user is looking at. Exporting something other than
+    /// what they can see is a support burden.
+    public func exportCurrentView() throws -> ReportExport? {
+        guard let store, let index = rowIndex else { return nil }
+        return try store.export(report: index.report, filter: index.filter,
+                                sortBy: index.sortColumn, ascending: index.ascending)
+    }
+
+    public func exportEverything() throws -> [ReportExport] {
+        guard let store else { return [] }
+        return try store.exportAll(reports: availableReports)
+    }
+
+    /// Whether there is anything to export yet.
+    public var canExport: Bool { store != nil }
+
+    public var crawlHost: String? { CrawlConfig(seedURL: seedURL).seedHost }
+
+    public func report(_ message: String) {
+        notice = message
+    }
+
+    public func selectRow(id: Int64?) {
+        selectedRowID = id
+        guard let store, let id else {
+            detail = nil
+            inlinks = nil
+            outlinks = nil
+            images = nil
+            redirectChain = []
+            return
+        }
+        detail = try? store.detail(id: id)
+        inlinks = try? store.inlinks(id: id)
+        outlinks = try? store.outlinks(id: id)
+        images = try? store.imageRows(id: id)
+        redirectChain = (try? store.redirectChain(from: id)) ?? []
+    }
+
+    /// Recomputes the sidebar counts, at most once per `countsRefreshInterval`
+    /// unless forced. Internal so tests can drive it with an injected clock
+    /// rather than waiting on the real tick.
+    func refreshCounts(force: Bool = false, now: Date = Date()) {
+        guard let store else { return }
+        if !force, now.timeIntervalSince(lastCountsRefresh) < Self.countsRefreshInterval { return }
+        lastCountsRefresh = now
+        // A failed read keeps the previous counts rather than blanking the
+        // sidebar: the same rule the row index follows.
+        if let fresh = try? store.counts(for: availableReports) { counts = fresh }
+        if let tree = try? store.siteTree() { siteTree = tree }
+        if let graph = try? store.linkGraph() { linkGraph = graph }
+        if let summary = try? store.summary() {
+            depthReached = summary.maxDepth
+        }
+        // Only while actually running: `state.isActive` (the ticking guard)
+        // is also true during `.paused`, and `pause()` resets `rate`, so
+        // observing here on a paused tick would set a fresh baseline and then
+        // compute a zero delta against an unchanged count — `perSecond`
+        // settling at 0.0 and `summary` reading "0.0/s" for the rest of the
+        // pause, even though `rate` is documented as nil when not measuring.
+        if state == .running {
+            rate.observe(crawled: progress?.crawled ?? 0, at: now)
+        }
     }
 
     /// A crawl that fetched nothing because robots.txt disallowed it looks
@@ -303,18 +495,19 @@ public final class CrawlController {
     /// instead, since the user is actively watching that one.
     func refreshRowIndexForLiveCrawl(now: Date = Date()) {
         if let index = rowIndex {
-            if index.sort.isAppendable {
+            if index.isAppendable {
                 index.appendNewIds()
                 if now.timeIntervalSince(lastFullRebuild) >= Self.liveFullRebuildInterval {
-                    index.rebuild(sort: index.sort, ascending: index.ascending)
+                    index.rebuild()
                     lastFullRebuild = now
                 }
             } else if now.timeIntervalSince(lastSortRebuild) >= Self.sortRebuildInterval {
-                index.rebuild(sort: index.sort, ascending: index.ascending)
+                index.rebuild()
                 lastSortRebuild = now
             }
         }
         rows?.refresh()
+        refreshCounts(now: now)
         revision &+= 1
     }
 

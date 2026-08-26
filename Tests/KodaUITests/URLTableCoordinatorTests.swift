@@ -5,6 +5,24 @@ import Testing
 @testable import KodaCore
 @testable import KodaUI
 
+private let internalReport = Reports.internalURLs
+
+/// Cell lookup is positional against the report's column list, so tests name the
+/// column and resolve its index the same way the coordinator does.
+private func col(_ id: String) -> Int {
+    internalReport.columns.firstIndex { $0.id == id }!
+}
+
+@MainActor
+private func rebuilt(_ store: Store) -> RowStore {
+    let index = RowIndex(store: store, report: internalReport)
+    index.rebuild(report: internalReport, filter: internalReport.defaultFilter,
+                  sortColumnID: nil, ascending: true)
+    let rows = RowStore(store: store, index: index)
+    rows.refresh()
+    return rows
+}
+
 @MainActor
 private func seededRows(pages: Int) throws -> RowStore {
     let store = try Store(path: nil)
@@ -26,36 +44,11 @@ private func seededRows(pages: Int) throws -> RowStore {
                            arguments: [id, "Title \(i)"])
         }
     }
-    let index = RowIndex(store: store)
-    index.rebuild(sort: .discoveryOrder, ascending: true)
-    let rows = RowStore(store: store, index: index)
-    rows.refresh()
-    return rows
+    return rebuilt(store)
 }
 
 @MainActor
-@Test func reportsTheRowCount() throws {
-    let coordinator = URLTableCoordinator(rows: try seededRows(pages: 12))
-    #expect(coordinator.numberOfRows(in: NSTableView()) == 12)
-}
-
-@MainActor
-@Test func reportsZeroRowsWithoutAStore() {
-    let coordinator = URLTableCoordinator(rows: nil)
-    #expect(coordinator.numberOfRows(in: NSTableView()) == 0)
-}
-
-@MainActor
-@Test func rendersEachColumn() throws {
-    let coordinator = URLTableCoordinator(rows: try seededRows(pages: 3))
-    #expect(coordinator.value(for: .address, row: 1) == "https://t.test/1")
-    #expect(coordinator.value(for: .status, row: 1) == "201")
-    #expect(coordinator.value(for: .title, row: 1) == "Title 1")
-    #expect(coordinator.value(for: .depth, row: 1) == "1")
-}
-
-@MainActor
-@Test func rendersMissingValuesAsEmptyRatherThanCrashing() throws {
+private func queuedOnlyRows() throws -> RowStore {
     let store = try Store(path: nil)
     try store.migrate()
     try store.initializeCrawl(config: CrawlConfig(seedURL: "https://t.test/"), startedAt: Date())
@@ -68,51 +61,77 @@ private func seededRows(pages: Int) throws -> RowStore {
             arguments: ["https://t.test/queued", Data("hq".utf8), "t.test", "/queued"]
         )
     }
-    let index = RowIndex(store: store)
-    index.rebuild(sort: .discoveryOrder, ascending: true)
-    let rows = RowStore(store: store, index: index)
-    rows.refresh()
-    let coordinator = URLTableCoordinator(rows: rows)
-
-    #expect(coordinator.value(for: .status, row: 0) == "", "an unfetched URL has no status")
-    #expect(coordinator.value(for: .title, row: 0) == "")
-    #expect(coordinator.value(for: .address, row: 0) == "https://t.test/queued")
+    return rebuilt(store)
 }
 
 @MainActor
-@Test func outOfRangeRowsRenderEmptyRatherThanCrashing() throws {
-    let coordinator = URLTableCoordinator(rows: try seededRows(pages: 2))
-    #expect(coordinator.value(for: .address, row: 99) == "")
-    #expect(coordinator.value(for: .status, row: -1) == "")
+@Test func reportsTheRowCount() throws {
+    let coordinator = URLTableCoordinator(rows: try seededRows(pages: 12), report: internalReport)
+    #expect(coordinator.numberOfRows(in: NSTableView()) == 12)
 }
 
 @MainActor
-@Test func columnsCoverTheSpecifiedSet() {
-    #expect(URLTableColumn.allCases.map(\.rawValue) == ["address", "status", "title", "depth"])
+@Test func reportsZeroRowsWithoutAStore() {
+    let coordinator = URLTableCoordinator(rows: nil, report: internalReport)
+    #expect(coordinator.numberOfRows(in: NSTableView()) == 0)
 }
 
 @MainActor
-@Test func columnTitlesAreHumanReadable() {
-    #expect(URLTableColumn.address.title == "Address")
-    #expect(URLTableColumn.status.title == "Status")
-    #expect(URLTableColumn.title.title == "Title")
-    #expect(URLTableColumn.depth.title == "Depth")
+@Test func cellsComeFromTheReportsColumnOrder() throws {
+    let coordinator = URLTableCoordinator(rows: try seededRows(pages: 3), report: internalReport)
+    #expect(coordinator.value(columnIndex: col("address"), row: 1) == "https://t.test/1")
+    #expect(coordinator.value(columnIndex: col("status"), row: 1) == "201")
+    #expect(coordinator.value(columnIndex: col("title"), row: 1) == "Title 1")
+    #expect(coordinator.value(columnIndex: col("depth"), row: 1) == "1")
+}
+
+/// A derived column has to survive the round trip too — `indexability` is a
+/// CASE expression, not a stored value.
+@MainActor
+@Test func aDerivedColumnRendersItsComputedValue() throws {
+    let coordinator = URLTableCoordinator(rows: try seededRows(pages: 1), report: internalReport)
+    #expect(coordinator.value(columnIndex: col("indexability"), row: 0) == Indexability.indexable)
+}
+
+@MainActor
+@Test func rendersMissingValuesAsEmptyRatherThanCrashing() throws {
+    let coordinator = URLTableCoordinator(rows: try queuedOnlyRows(), report: internalReport)
+    #expect(coordinator.value(columnIndex: col("status"), row: 0) == "",
+            "an unfetched URL has no status")
+    #expect(coordinator.value(columnIndex: col("title"), row: 0) == "")
+    #expect(coordinator.value(columnIndex: col("address"), row: 0) == "https://t.test/queued")
+}
+
+@MainActor
+@Test func outOfRangeRowsAndColumnsRenderEmptyRatherThanCrashing() throws {
+    let coordinator = URLTableCoordinator(rows: try seededRows(pages: 2), report: internalReport)
+    #expect(coordinator.value(columnIndex: col("address"), row: 99) == "")
+    #expect(coordinator.value(columnIndex: col("status"), row: -1) == "")
+    #expect(coordinator.value(columnIndex: 999, row: 0) == "")
+    #expect(coordinator.value(columnIndex: -1, row: 0) == "")
+}
+
+@MainActor
+@Test func theInternalReportLeadsWithTheColumnsAUserExpects() {
+    #expect(internalReport.columns.prefix(4).map(\.id)
+            == ["address", "status", "contentType", "indexability"])
+    #expect(internalReport.columns.map(\.header).allSatisfy { !$0.isEmpty })
 }
 
 // MARK: - tableView(_:viewFor:row:)
 //
-// `numberOfRows`/`value(for:row:)` above cover the data layer; these cover the
-// delegate method that actually builds the `NSTableCellView` AppKit draws,
-// including the cell-reuse branch and the unknown-column/out-of-range guards.
-// Everything here runs against a bare `NSTableView()` with no `NSApplication`
-// running, the same way the existing `reportsTheRowCount` test already
+// `numberOfRows`/`value(columnIndex:row:)` above cover the data layer; these
+// cover the delegate method that actually builds the `NSTableCellView` AppKit
+// draws, including the cell-reuse branch and the unknown-column/out-of-range
+// guards. Everything here runs against a bare `NSTableView()` with no
+// `NSApplication` running, the same way `reportsTheRowCount` already
 // constructs one — no SwiftUI hosting is required for any of this.
 
 @MainActor
 @Test func viewForRendersCellWithExpectedText() throws {
-    let coordinator = URLTableCoordinator(rows: try seededRows(pages: 3))
+    let coordinator = URLTableCoordinator(rows: try seededRows(pages: 3), report: internalReport)
     let table = NSTableView()
-    let column = NSTableColumn(identifier: .init(URLTableColumn.address.rawValue))
+    let column = NSTableColumn(identifier: .init("address"))
     table.addTableColumn(column)
 
     let view = try #require(coordinator.tableView(table, viewFor: column, row: 1) as? NSTableCellView)
@@ -121,8 +140,7 @@ private func seededRows(pages: Int) throws -> RowStore {
 
 /// AppKit's real reuse pool is populated by internal view teardown during
 /// actual on-screen scrolling/display, which never fires without a running
-/// `NSApplication` and a live window — confirmed empirically while writing
-/// this test (see task-6-report.md's fix-round sections): even with a real
+/// `NSApplication` and a live window — confirmed empirically: even with a real
 /// `NSWindow`/`NSScrollView` hierarchy, forced layout, and `scrollRowToVisible`
 /// past the row that was first drawn, `makeView(withIdentifier:owner:)`
 /// returned `nil` rather than handing back the earlier cell. So this cannot
@@ -132,20 +150,15 @@ private func seededRows(pages: Int) throws -> RowStore {
 ///
 /// This test only covers wiring: that `viewFor`, called repeatedly through
 /// the same table view and column, always hands back the requested row's own
-/// value rather than a value left over from an earlier call. It does NOT, by
-/// itself, guard against a `stringValue` assignment sliding into only one of
-/// `viewFor`'s two branches — under `makeView` always returning nil here,
-/// that mutation would be invisible to this test no matter how the rows are
-/// sequenced. What actually closes that gap is that `viewFor` no longer has
-/// two assignment sites to slide into: both branches call the single
-/// `configure(_:column:row:)` method below, and `configure` is tested
-/// directly, against a cell that already carries the wrong text, further
-/// down this file.
+/// value rather than one left over from an earlier call. What actually closes
+/// the reuse gap is that `viewFor` has no second assignment site to slide
+/// into: both branches call `configure(_:columnIndex:row:)`, which is tested
+/// directly further down this file.
 @MainActor
 @Test func viewForNeverCarriesAStaleNeighboursText() throws {
-    let coordinator = URLTableCoordinator(rows: try seededRows(pages: 5))
+    let coordinator = URLTableCoordinator(rows: try seededRows(pages: 5), report: internalReport)
     let table = NSTableView()
-    let column = NSTableColumn(identifier: .init(URLTableColumn.address.rawValue))
+    let column = NSTableColumn(identifier: .init("address"))
     table.addTableColumn(column)
 
     for row in [0, 3, 1, 4, 2] {
@@ -155,27 +168,45 @@ private func seededRows(pages: Int) throws -> RowStore {
 }
 
 @MainActor
-@Test func viewForReturnsNilForAnUnknownColumn() throws {
-    let coordinator = URLTableCoordinator(rows: try seededRows(pages: 2))
+@Test func viewForReturnsNilForAColumnTheReportDoesNotDeclare() throws {
+    let coordinator = URLTableCoordinator(rows: try seededRows(pages: 2), report: internalReport)
     let table = NSTableView()
-    let unknownColumn = NSTableColumn(identifier: .init("bogus"))
-    table.addTableColumn(unknownColumn)
-
-    #expect(coordinator.tableView(table, viewFor: unknownColumn, row: 0) == nil)
+    // "canonical" is a real column — of the Canonicals report, not this one.
+    for identifier in ["bogus", "canonical"] {
+        let column = NSTableColumn(identifier: .init(identifier))
+        table.addTableColumn(column)
+        #expect(coordinator.tableView(table, viewFor: column, row: 0) == nil)
+    }
 }
 
 @MainActor
 @Test func viewForRendersEmptyForARowBeyondTheRowCount() throws {
-    let coordinator = URLTableCoordinator(rows: try seededRows(pages: 2))
+    let coordinator = URLTableCoordinator(rows: try seededRows(pages: 2), report: internalReport)
     let table = NSTableView()
-    let column = NSTableColumn(identifier: .init(URLTableColumn.address.rawValue))
+    let column = NSTableColumn(identifier: .init("address"))
     table.addTableColumn(column)
 
     let view = try #require(coordinator.tableView(table, viewFor: column, row: 99) as? NSTableCellView)
     #expect(view.textField?.stringValue == "")
 }
 
-// MARK: - configure(_:column:row:)
+/// Switching tab replaces the columns wholesale. Without this the table would
+/// keep the previous report's headers while rendering the new report's cells.
+@MainActor
+@Test func installColumnsReplacesTheWholeSetAndClearsStaleSortDescriptors() throws {
+    let coordinator = URLTableCoordinator(rows: try seededRows(pages: 2), report: internalReport)
+    let table = NSTableView()
+    coordinator.installColumns(on: table, paneWidth: 1100)
+    #expect(table.tableColumns.map(\.identifier.rawValue) == internalReport.columns.map(\.id))
+
+    table.sortDescriptors = [NSSortDescriptor(key: "status", ascending: true)]
+    coordinator.report = Reports.canonicals
+    coordinator.installColumns(on: table, paneWidth: 1100)
+    #expect(table.tableColumns.map(\.identifier.rawValue) == Reports.canonicals.columns.map(\.id))
+    #expect(table.sortDescriptors.isEmpty, "a sort from the previous tab must not persist")
+}
+
+// MARK: - configure(_:columnIndex:row:)
 //
 // `viewFor`'s reuse and create branches both funnel into this one method, so
 // there is exactly one place a cell's text gets set. These tests target that
@@ -193,36 +224,20 @@ private func staleCell() -> NSTableCellView {
 
 @MainActor
 @Test func configureOverwritesStaleTextWithTheRowsOwnValue() throws {
-    let coordinator = URLTableCoordinator(rows: try seededRows(pages: 5))
+    let coordinator = URLTableCoordinator(rows: try seededRows(pages: 5), report: internalReport)
     let cell = staleCell()
 
-    coordinator.configure(cell, column: .address, row: 3)
+    coordinator.configure(cell, columnIndex: col("address"), row: 3)
 
     #expect(cell.textField?.stringValue == "https://t.test/3")
 }
 
 @MainActor
 @Test func configureOverwritesStaleTextWithEmptyWhenTheRowHasNoValue() throws {
-    let store = try Store(path: nil)
-    try store.migrate()
-    try store.initializeCrawl(config: CrawlConfig(seedURL: "https://t.test/"), startedAt: Date())
-    try store.dbQueue.write { db in
-        try db.execute(
-            sql: """
-                INSERT INTO urls (url, url_hash, host, path, depth, is_internal, discovered_at, state, redirect_hops)
-                VALUES (?,?,?,?,0,1,0,0,0)
-                """,
-            arguments: ["https://t.test/queued", Data("hq".utf8), "t.test", "/queued"]
-        )
-    }
-    let index = RowIndex(store: store)
-    index.rebuild(sort: .discoveryOrder, ascending: true)
-    let rows = RowStore(store: store, index: index)
-    rows.refresh()
-    let coordinator = URLTableCoordinator(rows: rows)
+    let coordinator = URLTableCoordinator(rows: try queuedOnlyRows(), report: internalReport)
     let cell = staleCell()
 
-    coordinator.configure(cell, column: .status, row: 0)
+    coordinator.configure(cell, columnIndex: col("status"), row: 0)
 
     #expect(
         cell.textField?.stringValue == "",

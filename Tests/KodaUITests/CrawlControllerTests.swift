@@ -20,6 +20,32 @@ private struct ThreePageClient: HTTPClient {
     }
 }
 
+/// Many linked pages and a small artificial delay per fetch, so the crawl
+/// takes long enough (several batches, tens of milliseconds apart) that a
+/// test can reliably observe `.running` and land a `pause()` in the middle —
+/// `ThreePageClient`'s three pages complete in a single poll tick of
+/// `waitUntil`, too fast to pause mid-crawl deterministically.
+private struct SlowManyPageClient: HTTPClient {
+    var pageCount = 40
+
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
+        if url.hasSuffix("/robots.txt") {
+            return .response(HTTPResponse(status: 404, headers: ["Content-Type": "text/plain"],
+                                          body: Data(), elapsedMs: 1))
+        }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let body: String
+        if url.hasSuffix("/") {
+            let links = (0..<pageCount).map { "<a href=\"/p\($0)\">p\($0)</a>" }.joined()
+            body = "<html><head><title>Home</title></head><body>\(links)</body></html>"
+        } else {
+            body = "<html><head><title>Page</title></head><body>leaf</body></html>"
+        }
+        return .response(HTTPResponse(status: 200, headers: ["Content-Type": "text/html"],
+                                      body: Data(body.utf8), elapsedMs: 1))
+    }
+}
+
 private struct FailingClient: HTTPClient {
     func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
         .failure(kind: "URLError.cannotFindHost")
@@ -108,6 +134,47 @@ private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) async
     #expect(await waitUntil { (c.progress?.crawled ?? 0) > 0 }, "progress reaches the controller")
 }
 
+/// `rate` is documented as nil when not measuring, but `startTicking()` guards
+/// on `state.isActive`, which is true for `.paused` too — so before this fix,
+/// `refreshCounts` kept calling `rate.observe` on every tick during a pause.
+/// After `pause()`'s `reset()`, the next tick set a fresh baseline and the one
+/// after computed a zero delta against the unchanged count, so `perSecond`
+/// settled at 0.0 rather than staying nil. `refreshCounts(force:now:)` is
+/// internal with an injectable clock precisely so this can be driven directly,
+/// without waiting on the real 500ms ticker.
+@MainActor
+@Test func rateStaysAbsentThroughoutAPause() async {
+    let c = CrawlController(client: SlowManyPageClient(), parser: SwiftSoupParser(), dbPath: nil)
+    c.seedURL = "https://slow.test/"
+    await c.start()
+    #expect(c.state == .running, "beginCrawl sets .running synchronously, before start() returns")
+    // `pause()` only takes effect against the engine's own state, which only
+    // becomes `.running` once its `run()` loop actually starts — waiting for
+    // real progress is what makes the pause below land between batches
+    // rather than racing a `run()` task that has not started yet.
+    #expect(await waitUntil { (c.progress?.crawled ?? 0) > 0 },
+            "the crawl must be genuinely under way before it can be paused")
+
+    let t0 = Date()
+    c.refreshCounts(force: true, now: t0)
+    c.refreshCounts(force: true, now: t0.addingTimeInterval(1))
+
+    await c.pause()
+    #expect(c.state == .paused)
+    #expect(c.rate.perSecond == nil, "pause() resets the rate directly")
+
+    // Two ticks, not one: the bug needs a first paused tick to set a baseline
+    // and a second to compute the zero delta against it.
+    c.refreshCounts(force: true, now: t0.addingTimeInterval(2))
+    c.refreshCounts(force: true, now: t0.addingTimeInterval(3))
+
+    #expect(c.rate.perSecond == nil, "a paused crawl must not resume measuring a rate")
+
+    await c.resume()
+    #expect(await waitUntil { c.state == .finished })
+    #expect(c.depthReached != nil, "the finished crawl's depth is recorded")
+}
+
 /// Item 1 of the M2 final review: the shipped app must write a real file, not an
 /// in-memory database, and `CrawlController` is where that resolution has to happen
 /// (the host isn't known until the user has typed a seed URL). `crawlsDirectory` is
@@ -138,6 +205,17 @@ private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) async
 /// it. `start()` instead publishes `pendingExistingCrawl` and waits — the tests
 /// below exercise each of the three answers the sheet in `ContentView` offers
 /// (Replace, Resume, Cancel), driven directly through the controller's API.
+///
+/// Each of these tests opens two `CrawlController`s on the same `.koda` file
+/// within a single test — `first` finishes and is left to be released by ARC,
+/// then `second` opens that same file to resume or replace it. That is why
+/// this file must be run with `swift test --no-parallel` rather than plain
+/// `swift test`: `first`'s GRDB connection is closed only when ARC gets
+/// around to deallocating it, not synchronously when the test moves on, so
+/// under parallel test execution `second`'s open can race that deallocation
+/// and hit `SQLite error 5: database is locked`. This is a known
+/// test-isolation defect, not a product defect — see the README — and is not
+/// something to fix here.
 @MainActor
 private func directoryProvider(_ tempRoot: URL) -> @MainActor @Sendable () -> URL {
     { CrawlDatabaseLocation.crawlsDirectory(appSupport: tempRoot) }
@@ -239,7 +317,8 @@ private func directoryProvider(_ tempRoot: URL) -> @MainActor @Sendable () -> UR
 @MainActor
 private func visibleAddresses(_ c: CrawlController) -> [String] {
     guard let rows = c.rows else { return [] }
-    return (0..<rows.count).compactMap { rows.row(at: $0)?.address }
+    // Address is the Internal report's first column.
+    return (0..<rows.count).compactMap { rows.row(at: $0)?.cells.first ?? nil }
 }
 
 /// The correctness fix Task 7 owns: `RowIndex.appendNewIds()` advances a

@@ -34,7 +34,44 @@ public enum FetchOutcome: Sendable {
 
 public protocol HTTPClient: Sendable {
     func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome
+
+    /// Same, with extra request headers. Default-implemented by ignoring them,
+    /// so every existing client and test keeps compiling unchanged.
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval,
+               headers: [String: String]) async -> FetchOutcome
+
+    /// Same again, with a request body. Only the metrics providers need this —
+    /// crawling is all GET and HEAD — so it is default-implemented by ignoring
+    /// the body rather than forced on every client.
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval,
+               headers: [String: String], body: Data?) async -> FetchOutcome
 }
+extension HTTPClient {
+    /// The default chain runs *downward*: the headers form defers to the
+    /// headers-and-body form, which defers to the bare form.
+    ///
+    /// The direction matters and was got wrong once. With both defaults
+    /// deferring to the bare form, a client that implemented only the
+    /// headers-and-body version lost its headers whenever something called the
+    /// headers form — silently, because dropping a header is not an error, it
+    /// is just an unauthenticated request. Going downward means implementing
+    /// the richest form you need is always enough.
+    ///
+    /// A client implementing only the bare form still ignores headers, which is
+    /// correct: it has nowhere to put them, and every such client in this
+    /// project is a test stub for the crawler, where there are none.
+    public func fetch(url: String, method: String, userAgent: String,
+                      timeout: TimeInterval, headers: [String: String]) async -> FetchOutcome {
+        await fetch(url: url, method: method, userAgent: userAgent, timeout: timeout,
+                    headers: headers, body: nil)
+    }
+
+    public func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval,
+                      headers: [String: String], body: Data?) async -> FetchOutcome {
+        await fetch(url: url, method: method, userAgent: userAgent, timeout: timeout)
+    }
+}
+
 
 /// Maps `URLError.Code` to a stable, human-readable name.
 ///
@@ -102,13 +139,29 @@ public struct URLSessionHTTPClient: HTTPClient {
         }
     }
 
-    public func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
+    public func fetch(url: String, method: String, userAgent: String,
+                      timeout: TimeInterval) async -> FetchOutcome {
+        await fetch(url: url, method: method, userAgent: userAgent, timeout: timeout, headers: [:])
+    }
+
+    public func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval,
+                      headers: [String: String]) async -> FetchOutcome {
+        await fetch(url: url, method: method, userAgent: userAgent, timeout: timeout,
+                    headers: headers, body: nil)
+    }
+
+    public func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval,
+                      headers: [String: String], body: Data?) async -> FetchOutcome {
         guard let parsed = URL(string: url), parsed.host != nil else {
             return .failure(kind: "invalidURL")
         }
         var request = URLRequest(url: parsed, timeoutInterval: timeout)
         request.httpMethod = method
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        // Caller-supplied headers last, so a configured Authorization or
+        // User-Agent override actually overrides.
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
+        request.httpBody = body
         request.setValue("text/html,application/xhtml+xml,*/*;q=0.8", forHTTPHeaderField: "Accept")
 
         let start = DispatchTime.now().uptimeNanoseconds

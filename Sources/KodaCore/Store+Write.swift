@@ -15,14 +15,26 @@ extension Store {
                     sql: """
                         INSERT INTO responses
                           (url_id, status, error_kind, content_type, content_length,
-                           response_time_ms, redirect_target_id, fetched_at, body_gz)
-                        VALUES (?,?,?,?,?,?,?,?,?)
+                           response_time_ms, redirect_target_id, fetched_at, body_gz, headers_json,
+                           rendered, render_ms, js_errors, rendered_words, static_words,
+                           perf_ttfb_ms, perf_fcp_ms, perf_lcp_ms, perf_dcl_ms, perf_load_ms,
+                           perf_resources)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(url_id) DO UPDATE SET
                           status=excluded.status, error_kind=excluded.error_kind,
                           content_type=excluded.content_type, content_length=excluded.content_length,
                           response_time_ms=excluded.response_time_ms,
                           redirect_target_id=excluded.redirect_target_id,
-                          fetched_at=excluded.fetched_at, body_gz=excluded.body_gz
+                          fetched_at=excluded.fetched_at, body_gz=excluded.body_gz,
+                          headers_json=excluded.headers_json,
+                          rendered=excluded.rendered, render_ms=excluded.render_ms,
+                          js_errors=excluded.js_errors,
+                          rendered_words=excluded.rendered_words,
+                          static_words=excluded.static_words,
+                          perf_ttfb_ms=excluded.perf_ttfb_ms, perf_fcp_ms=excluded.perf_fcp_ms,
+                          perf_lcp_ms=excluded.perf_lcp_ms, perf_dcl_ms=excluded.perf_dcl_ms,
+                          perf_load_ms=excluded.perf_load_ms,
+                          perf_resources=excluded.perf_resources
                         """,
                     arguments: [
                         result.urlID, result.status, result.errorKind, result.contentType,
@@ -31,6 +43,20 @@ extension Store {
                                                config: config, seedHost: seedHost, now: now, discovered: &discovered,
                                                inheritsParentDepth: true),
                         now.timeIntervalSince1970, result.bodyGz,
+                        result.headers.isEmpty ? nil
+                            : String(data: (try? JSONEncoder().encode(result.headers)) ?? Data(),
+                                     encoding: .utf8),
+                        result.render == nil ? 0 : 1,
+                        result.render?.elapsedMs,
+                        result.render.flatMap { $0.errors.isEmpty ? nil : $0.errors.joined(separator: "\n") },
+                        result.render?.renderedWords,
+                        result.render?.staticWords,
+                        result.render?.metrics?.ttfb.map { Int($0.rounded()) },
+                        result.render?.metrics?.fcp.map { Int($0.rounded()) },
+                        result.render?.metrics?.lcp.map { Int($0.rounded()) },
+                        result.render?.metrics?.dcl.map { Int($0.rounded()) },
+                        result.render?.metrics?.load.map { Int($0.rounded()) },
+                        result.render?.metrics?.resources,
                     ]
                 )
 
@@ -59,24 +85,49 @@ extension Store {
                 INSERT INTO page_facts
                   (url_id, title, title_length, title_count,
                    meta_description, meta_description_length, meta_description_count,
-                   h1, h1_count, h2_count, canonical_id, meta_robots, x_robots_tag,
-                   lang, word_count, content_hash)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   h1, h1_count, h2, h2_count, canonical_id, canonical_count,
+                   meta_robots, x_robots_tag, lang, word_count, text_length, content_hash,
+                   title_pixels, meta_description_pixels,
+                   simhash,
+                   og_title, og_description, og_image, og_type,
+                   twitter_card, twitter_title, twitter_image,
+                   amphtml, rel_prev, rel_next, analytics)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(url_id) DO UPDATE SET
                   title=excluded.title, title_length=excluded.title_length, title_count=excluded.title_count,
                   meta_description=excluded.meta_description,
                   meta_description_length=excluded.meta_description_length,
                   meta_description_count=excluded.meta_description_count,
-                  h1=excluded.h1, h1_count=excluded.h1_count, h2_count=excluded.h2_count,
-                  canonical_id=excluded.canonical_id, meta_robots=excluded.meta_robots,
+                  h1=excluded.h1, h1_count=excluded.h1_count,
+                  h2=excluded.h2, h2_count=excluded.h2_count,
+                  canonical_id=excluded.canonical_id, canonical_count=excluded.canonical_count,
+                  meta_robots=excluded.meta_robots,
                   x_robots_tag=excluded.x_robots_tag, lang=excluded.lang,
-                  word_count=excluded.word_count, content_hash=excluded.content_hash
+                  word_count=excluded.word_count, text_length=excluded.text_length,
+                  content_hash=excluded.content_hash,
+                  simhash=excluded.simhash,
+                  title_pixels=excluded.title_pixels,
+                  meta_description_pixels=excluded.meta_description_pixels,
+                  og_title=excluded.og_title, og_description=excluded.og_description,
+                  og_image=excluded.og_image, og_type=excluded.og_type,
+                  twitter_card=excluded.twitter_card, twitter_title=excluded.twitter_title,
+                  twitter_image=excluded.twitter_image, amphtml=excluded.amphtml,
+                  rel_prev=excluded.rel_prev, rel_next=excluded.rel_next,
+                  analytics=excluded.analytics
                 """,
             arguments: [
                 result.urlID, facts.title, facts.titleLength, facts.titleCount,
                 facts.metaDescription, facts.metaDescriptionLength, facts.metaDescriptionCount,
-                facts.h1, facts.h1Count, facts.h2Count, canonicalID, facts.metaRobots, result.xRobotsTag,
-                facts.lang, facts.wordCount, facts.contentHash,
+                facts.h1, facts.h1Count, facts.h2, facts.h2Count,
+                canonicalID, facts.canonicalCount, facts.metaRobots, result.xRobotsTag,
+                facts.lang, facts.wordCount, facts.textLength, facts.contentHash,
+                SERPMetrics.titleWidth(facts.title).map { Int($0.rounded()) },
+                SERPMetrics.descriptionWidth(facts.metaDescription).map { Int($0.rounded()) },
+                facts.simHash,
+                facts.ogTitle, facts.ogDescription, facts.ogImage, facts.ogType,
+                facts.twitterCard, facts.twitterTitle, facts.twitterImage,
+                facts.amphtml, facts.relPrev, facts.relNext,
+                facts.analytics.isEmpty ? nil : facts.analytics.joined(separator: ", "),
             ]
         )
 
@@ -85,7 +136,11 @@ extension Store {
             guard let target = URLNormalizer.normalize(link.href, relativeTo: result.url) else { continue }
             let isInternal = Self.isInternal(target, seedHost: seedHost, config: config)
             let isNofollow = link.rel?.lowercased().contains("nofollow") == true
-            let followInternal = isInternal && (!isNofollow || config.followInternalNofollow)
+            // List mode audits a known set, so a link is recorded but never
+            // followed. Status-checking external links still applies: that is
+            // about the links on the listed pages, not about discovering more.
+            let followInternal = !config.listModeOnly
+                && isInternal && (!isNofollow || config.followInternalNofollow)
             // External links are not crawled, but we do want their status — a
             // broken outbound link is a real finding.
             let statusCheckExternal = !isInternal && config.checkExternalLinks
@@ -110,8 +165,52 @@ extension Store {
                                            seedHost: seedHost, now: now,
                                            enqueue: config.checkImages, discovered: &discovered,
                                            checkOnly: config.checkImages)
-            try db.execute(sql: "INSERT INTO images (url_id, src_url_id, alt) VALUES (?,?,?)",
-                           arguments: [result.urlID, srcID, image.alt])
+            try db.execute(
+                sql: "INSERT INTO images (url_id, src_url_id, alt, width, height) VALUES (?,?,?,?,?)",
+                arguments: [result.urlID, srcID, image.alt, image.width, image.height])
+        }
+
+        try db.execute(sql: "DELETE FROM simhash_bands WHERE url_id = ?", arguments: [result.urlID])
+        if let simHash = facts.simHash {
+            for (band, value) in SimHash.bands(simHash).enumerated() {
+                try db.execute(
+                    sql: "INSERT INTO simhash_bands (url_id, band, value) VALUES (?,?,?)",
+                    arguments: [result.urlID, band, value])
+            }
+        }
+
+        try db.execute(sql: "DELETE FROM resources WHERE url_id = ?", arguments: [result.urlID])
+        for resource in facts.resources {
+            guard let src = URLNormalizer.normalize(resource.src, relativeTo: result.url) else { continue }
+            let srcID = try Self.upsertURL(db, src, parentDepth: result.depth, config: config,
+                                           seedHost: seedHost, now: now,
+                                           enqueue: config.checkResources, discovered: &discovered,
+                                           checkOnly: config.checkResources)
+            try db.execute(sql: "INSERT INTO resources (url_id, src_url_id, kind) VALUES (?,?,?)",
+                           arguments: [result.urlID, srcID, resource.kind])
+        }
+
+        try db.execute(sql: "DELETE FROM extractions WHERE url_id = ?", arguments: [result.urlID])
+        // Named response headers, pulled into the same table as the CSS and
+        // JavaScript extractions: they answer the same question — "show me this
+        // one value for every page" — so they belong in the same tab.
+        for name in config.headerExtractions {
+            let match = result.headers.first { $0.key.lowercased() == name.lowercased() }
+            guard let match else { continue }
+            try db.execute(
+                sql: "INSERT INTO extractions (url_id, name, value, position) VALUES (?,?,?,0)",
+                arguments: [result.urlID, name, match.value])
+        }
+        for entry in facts.extractions {
+            try db.execute(
+                sql: "INSERT INTO extractions (url_id, name, value, position) VALUES (?,?,?,?)",
+                arguments: [result.urlID, entry.name, entry.value, entry.position])
+        }
+
+        try db.execute(sql: "DELETE FROM structured_data WHERE url_id = ?", arguments: [result.urlID])
+        for entry in facts.structuredData {
+            try db.execute(sql: "INSERT INTO structured_data (url_id, format, type) VALUES (?,?,?)",
+                           arguments: [result.urlID, entry.format, entry.type])
         }
 
         try db.execute(sql: "DELETE FROM hreflang WHERE url_id = ?", arguments: [result.urlID])
@@ -177,25 +276,36 @@ extension Store {
         let depth = parentDepth + 1
 
         var shouldQueue = enqueue
-        if shouldQueue, let maxDepth = config.maxDepth, depth > maxDepth { shouldQueue = false }
-        if shouldQueue, !passesFilters(url, config: config) { shouldQueue = false }
-        if shouldQueue, redirectHops > config.maxRedirects { shouldQueue = false }
+        // Recorded alongside the decision rather than inferred later: a crawl
+        // that quietly stopped short used to be indistinguishable from one that
+        // finished, because the row said "skipped" and nothing said why.
+        var skipReason: String? = enqueue ? nil : (internalFlag ? "not followed" : "external")
+        if shouldQueue, let maxDepth = config.maxDepth, depth > maxDepth {
+            shouldQueue = false; skipReason = "beyond max depth"
+        }
+        if shouldQueue, !passesFilters(url, config: config) {
+            shouldQueue = false; skipReason = "excluded by URL filters"
+        }
+        if shouldQueue, redirectHops > config.maxRedirects {
+            shouldQueue = false; skipReason = "redirect chain too long"
+        }
         if shouldQueue {
             // Only rows that still count against crawl budget — queued, in-flight, or done.
             // Skipped rows (state 3) are external links, images, and filtered targets that
             // will never be crawled, so they must not starve internal discovery of budget.
             let total = try Int.fetchOne(db, sql: "SELECT count(*) FROM urls WHERE state != 3") ?? 0
-            if total >= config.urlCap { shouldQueue = false }
+            if total >= config.urlCap { shouldQueue = false; skipReason = "URL cap reached" }
         }
 
         try db.execute(
             sql: """
-                INSERT INTO urls (url, url_hash, host, path, depth, is_internal, discovered_at, state, redirect_hops, check_only)
-                VALUES (?,?,?,?,?,?,?,?,?,?)
+                INSERT INTO urls (url, url_hash, host, path, depth, is_internal, discovered_at,
+                                  state, redirect_hops, check_only, skip_reason)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
                 """,
             arguments: [url.absoluteString, url.sha256, url.host, url.path, depth,
                         internalFlag ? 1 : 0, now.timeIntervalSince1970, shouldQueue ? 0 : 3, redirectHops,
-                        checkOnly ? 1 : 0]
+                        checkOnly ? 1 : 0, shouldQueue ? nil : skipReason]
         )
         if shouldQueue { discovered += 1 }
         return db.lastInsertedRowID

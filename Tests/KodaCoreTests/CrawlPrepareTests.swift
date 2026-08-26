@@ -16,7 +16,7 @@ private struct TinyClient: HTTPClient {
 
 @Test func prepareReturnsAnEngineThatHasNotRunYet() async throws {
     let config = CrawlConfig(seedURL: "https://tiny.test/")
-    let (engine, store, outcome) = try await CrawlSession.prepare(
+    let (engine, store, outcome, _) = try await CrawlSession.prepare(
         dbPath: nil, config: config, client: TinyClient(), parser: SwiftSoupParser()
     )
 
@@ -32,7 +32,7 @@ private struct TinyClient: HTTPClient {
 
 @Test func prepareGivesARunnableEngine() async throws {
     let config = CrawlConfig(seedURL: "https://tiny.test/")
-    let (engine, store, _) = try await CrawlSession.prepare(
+    let (engine, store, _, _) = try await CrawlSession.prepare(
         dbPath: nil, config: config, client: TinyClient(), parser: SwiftSoupParser()
     )
     try await engine.run(onProgress: nil)

@@ -1984,18 +1984,25 @@ git commit -m "feat: resume, replace, or cancel when a crawl already exists"
 
 ## M3a Completion Criteria
 
-- [ ] `swift test` passes: all M1 and M2 tests plus the new ones
-- [ ] A crawl records statuses for external links and sizes for images
-- [ ] No batch exceeds `maxPerHost` requests to a single host
-- [ ] `checkExternalLinks = false` restores M2's behaviour exactly
-- [ ] A fetched image does not appear in the URL table
-- [ ] Clicking a column header sorts the table; clicking again reverses it
-- [ ] Rows with no status or title sort last in both directions
-- [ ] Scrolling to the end of a 10,000-row crawl is as fast as scrolling to the start
-- [ ] Starting a crawl over an existing database offers Resume / Replace / Cancel
-- [ ] Resuming an interrupted crawl continues it; resuming a finished one displays it
-- [ ] `grep -rE 'import (AppKit|SwiftUI)' Sources/KodaCore` returns nothing
-- [ ] The only build warning class is the swift-testing deprecation notice
+- [x] `swift test` passes: all M1 and M2 tests plus the new ones
+- [x] A crawl records statuses for external links and sizes for images
+- [x] No batch exceeds `maxPerHost` requests to a single host
+- [x] `checkExternalLinks = false` restores M2's behaviour exactly
+- [x] A fetched image does not appear in the URL table
+- [x] Clicking a column header sorts the table; clicking again reverses it
+- [x] Rows with no status or title sort last in both directions
+- [x] Scrolling to the end of a 10,000-row crawl is as fast as scrolling to the start
+- [x] Starting a crawl over an existing database offers Resume / Replace / Cancel
+- [x] Resuming an interrupted crawl continues it; resuming a finished one displays it
+- [x] `grep -rE 'import (AppKit|SwiftUI)' Sources/KodaCore` returns nothing
+- [x] The only build warning class is the swift-testing deprecation notice
+
+
+Verified 2026-08-21 against `e52758c`: `swift build` clean with no warnings of
+any class, `swift test` 241 passed, `grep -rE 'import (AppKit|SwiftUI)'
+Sources/KodaCore` empty. The behavioural criteria are covered by
+`HostDiversityTests`, `CheckOnlyEnqueueTests`, `CheckOnlyFetchTests`,
+`RowIndexTests`, `SortMappingTests`, `RowStoreTests`, and `ResumeChoiceTests`.
 
 ## Deliberately deferred to M3b
 

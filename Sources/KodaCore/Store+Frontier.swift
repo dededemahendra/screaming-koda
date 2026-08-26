@@ -97,8 +97,14 @@ extension Store {
         try dbQueue.write { db in try Self.setState(db, id: id, state: 2) }
     }
 
-    public func markSkipped(_ id: Int64) throws {
-        try dbQueue.write { db in try Self.setState(db, id: id, state: 3) }
+    /// - Parameter reason: why, so the Crawlability report can say something
+    ///   more useful than "not crawled".
+    public func markSkipped(_ id: Int64, reason: String = "blocked by robots.txt") throws {
+        try dbQueue.write { db in
+            try Self.setState(db, id: id, state: 3)
+            try db.execute(sql: "UPDATE urls SET skip_reason = ? WHERE id = ?",
+                           arguments: [reason, id])
+        }
     }
 
     static func setState(_ db: Database, id: Int64, state: Int) throws {
@@ -125,6 +131,56 @@ extension Store {
             }
             let total = try Int.fetchOne(db, sql: "SELECT count(*) FROM urls") ?? 0
             return (try count(0), try count(1), try count(2), total)
+        }
+    }
+}
+
+extension Store {
+    /// Seeds the frontier from a sitemap, marking each URL as sitemap-declared.
+    ///
+    /// A URL already discovered by crawling is marked rather than re-inserted,
+    /// and one already crawled is not re-queued — so running a sitemap seed over
+    /// an existing crawl annotates it instead of restarting it.
+    ///
+    /// Returns how many URLs were newly queued.
+    @discardableResult
+    public func seedFromSitemap(_ urls: [NormalizedURL], config: CrawlConfig,
+                                now: Date) throws -> Int {
+        guard !urls.isEmpty else { return 0 }
+        let seedHost = config.seedHost
+        var queued = 0
+        try dbQueue.write { db in
+            for url in urls {
+                let isInternal = Self.isInternal(url, seedHost: seedHost, config: config)
+                // A sitemap listing another site's URLs is a mistake worth
+                // recording, but not worth crawling.
+                let existing = try Int64.fetchOne(
+                    db, sql: "SELECT id FROM urls WHERE url_hash = ?", arguments: [url.sha256])
+                if let existing {
+                    try db.execute(sql: "UPDATE urls SET in_sitemap = 1 WHERE id = ?",
+                                   arguments: [existing])
+                    continue
+                }
+                let shouldQueue = isInternal && Self.passesFilters(url, config: config)
+                try db.execute(
+                    sql: """
+                        INSERT INTO urls (url, url_hash, host, path, depth, is_internal,
+                                          discovered_at, state, in_sitemap)
+                        VALUES (?,?,?,?,0,?,?,?,1)
+                        """,
+                    arguments: [url.absoluteString, url.sha256, url.host, url.path,
+                                isInternal ? 1 : 0, now.timeIntervalSince1970,
+                                shouldQueue ? 0 : 3])
+                if shouldQueue { queued += 1 }
+            }
+        }
+        return queued
+    }
+
+    /// How many URLs a sitemap declared, for the crawl summary and the UI.
+    public func sitemapCount() throws -> Int {
+        try dbQueue.read { db in
+            try Int.fetchOne(db, sql: "SELECT count(*) FROM urls WHERE in_sitemap = 1") ?? 0
         }
     }
 }

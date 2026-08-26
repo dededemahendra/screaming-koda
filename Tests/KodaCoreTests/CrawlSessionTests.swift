@@ -191,3 +191,54 @@ private struct InfiniteRobotsRedirectClient: HTTPClient {
                                          parser: SwiftSoupParser(), onProgress: nil)
     }
 }
+
+/// Three internal pages behind a 404 robots.txt, so the whole site is crawlable.
+private struct ThreePageClient: HTTPClient {
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
+        if url.hasSuffix("/robots.txt") {
+            return .response(HTTPResponse(status: 404, headers: [:], body: Data(), elapsedMs: 1))
+        }
+        let body = url.hasSuffix("/")
+            ? "<html><head><title>Home</title></head><body><a href='/a'>a</a><a href='/b'>b</a></body></html>"
+            : "<html><head><title>Leaf</title></head><body></body></html>"
+        return .response(HTTPResponse(status: 200, headers: ["Content-Type": "text/html"],
+                                      body: Data(body.utf8), elapsedMs: 1))
+    }
+}
+
+/// Resume is a *store*-level guarantee, distinct from the in-engine pause/resume in
+/// `CrawlControlTests` and the UI-level sheet in `ResumeChoiceTests`: a second
+/// `CrawlSession.start` against an existing database file must continue that crawl
+/// rather than rediscover the site from scratch.
+@Test func startResumesInterruptedCrawlInSameDatabase() async throws {
+    let path = FileManager.default.temporaryDirectory
+        .appendingPathComponent("resume-\(UUID().uuidString).koda").path
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    var config = CrawlConfig(seedURL: "https://resume.test/")
+    config.workers = 1
+
+    let (first, _) = try await CrawlSession.start(dbPath: path, config: config, client: ThreePageClient(),
+                                                  parser: SwiftSoupParser(), onProgress: nil)
+    let afterFirst = try first.urlCounts()
+    #expect(afterFirst.done == 3)
+
+    // Simulate a crash mid-crawl: /a and /b never completed, so their rows are
+    // still in-flight and carry no response.
+    try await first.dbQueue.write { db in
+        try db.execute(sql: "DELETE FROM responses WHERE url_id IN (SELECT id FROM urls WHERE path IN ('/a','/b'))")
+        try db.execute(sql: "UPDATE urls SET state = 1 WHERE path IN ('/a','/b')")
+    }
+
+    let (second, _) = try await CrawlSession.start(dbPath: path, config: config, client: ThreePageClient(),
+                                                   parser: SwiftSoupParser(), onProgress: nil)
+    let counts = try second.urlCounts()
+    #expect(counts.total == afterFirst.total, "resuming does not rediscover the site from scratch")
+    #expect(counts.done == 3, "the interrupted URLs were picked back up and finished")
+    #expect(counts.inFlight == 0)
+
+    let responses = try await second.dbQueue.read { db in
+        try Int.fetchOne(db, sql: "SELECT count(*) FROM responses") ?? 0
+    }
+    #expect(responses == 3)
+}

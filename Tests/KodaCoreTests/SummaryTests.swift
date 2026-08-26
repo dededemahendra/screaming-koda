@@ -145,3 +145,38 @@ private struct LinkedAndEmbeddedClient: HTTPClient {
     let s = try store.summary()
     #expect(s.internalURLs == 2, "/b is a real fetched page even though it's also embedded as an <img src>")
 }
+
+/// Since PDFs are parsed they get a `page_facts` row, and a PDF has no H1 by
+/// definition — so counting it as "missing H1" invents a finding that no report
+/// shows. Caught by the summary-versus-reports agreement test; pinned here so it
+/// fails for the right reason if it ever comes back.
+@Test func aPDFDoesNotCountAsAPageMissingItsHeadings() throws {
+    let store = try Store(path: nil)
+    try store.migrate()
+    try store.dbQueue.write { db in
+        for (path, type) in [("/page.html", "text/html; charset=utf-8"),
+                             ("/doc.pdf", "application/pdf")] {
+            try db.execute(
+                sql: """
+                    INSERT INTO urls (url, url_hash, host, path, depth, is_internal, discovered_at, state)
+                    VALUES (?,?,?,?,1,1,0,2)
+                    """,
+                arguments: ["https://p.test\(path)", Data(path.utf8), "p.test", path])
+            let id = db.lastInsertedRowID
+            try db.execute(
+                sql: "INSERT INTO responses (url_id, status, content_type, fetched_at) VALUES (?,200,?,0)",
+                arguments: [id, type])
+            // Neither has an H1; only the HTML page is a finding.
+            try db.execute(sql: "INSERT INTO page_facts (url_id, title) VALUES (?,?)",
+                           arguments: [id, "A title"])
+        }
+    }
+    let summary = try store.summary()
+    #expect(summary.missingH1 == 1, "the HTML page only")
+    #expect(summary.missingDescriptions == 1)
+
+    // And the reports agree, which is the property that actually matters.
+    let counts = try store.counts(for: Reports.all)
+    #expect(counts["headings.missingH1"] == summary.missingH1)
+    #expect(counts["metaDescription.missing"] == summary.missingDescriptions)
+}

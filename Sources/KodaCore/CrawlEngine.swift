@@ -26,6 +26,9 @@ public actor CrawlEngine {
     private let parser: PageParser
     private let config: CrawlConfig
     private let robots: RobotsRules
+    /// Injected, and nil unless the caller supplied one — `KodaCore` cannot
+    /// build a renderer itself without taking a dependency on WebKit.
+    private let renderer: PageRenderer?
 
     private var crawled = 0
     private var discovered = 0
@@ -38,13 +41,15 @@ public actor CrawlEngine {
         client: HTTPClient,
         parser: PageParser,
         config: CrawlConfig,
-        robots: RobotsRules = .allowAll
+        robots: RobotsRules = .allowAll,
+        renderer: PageRenderer? = nil
     ) {
         self.store = store
         self.client = client
         self.parser = parser
         self.config = config
         self.robots = robots
+        self.renderer = renderer
     }
 
     public var state: CrawlState { currentState }
@@ -126,9 +131,10 @@ public actor CrawlEngine {
 
                 await withTaskGroup(of: CrawlResult?.self) { group in
                     for item in batch {
-                        group.addTask { [config, robots, client, parser, retainBodies] in
+                        group.addTask { [config, robots, client, parser, retainBodies, renderer] in
                             await Self.process(item: item, config: config, robots: robots,
-                                               client: client, parser: parser, retainBodies: retainBodies)
+                                               client: client, parser: parser,
+                                               retainBodies: retainBodies, renderer: renderer)
                         }
                     }
                     for await result in group {
@@ -177,14 +183,16 @@ public actor CrawlEngine {
         item: FrontierItem, config: CrawlConfig, client: HTTPClient
     ) async -> CrawlResult {
         var outcome = await client.fetch(url: item.url.absoluteString, method: "HEAD",
-                                         userAgent: config.userAgent, timeout: config.timeout)
+                                         userAgent: config.effectiveUserAgent, timeout: config.timeout,
+                                         headers: config.requestHeaders)
 
         // 405 and 501 are the two codes that actually mean "this server does not do
         // HEAD". Retrying on any other 4xx would double our traffic on ordinary 404s.
         var usedGETFallback = false
         if case .response(let head) = outcome, head.status == 405 || head.status == 501 {
             outcome = await client.fetch(url: item.url.absoluteString, method: "GET",
-                                         userAgent: config.userAgent, timeout: config.timeout)
+                                         userAgent: config.effectiveUserAgent, timeout: config.timeout,
+                                         headers: config.requestHeaders)
             usedGETFallback = true
         }
 
@@ -221,7 +229,8 @@ public actor CrawlEngine {
 
     private static func process(
         item: FrontierItem, config: CrawlConfig, robots: RobotsRules,
-        client: HTTPClient, parser: PageParser, retainBodies: Bool
+        client: HTTPClient, parser: PageParser, retainBodies: Bool,
+        renderer: PageRenderer?
     ) async -> CrawlResult? {
         // `robots` is the ruleset fetched once for the SEED host (CrawlSession never
         // fetches robots.txt for other hosts — one HEAD per unique URL is the agreed
@@ -238,7 +247,8 @@ public actor CrawlEngine {
         }
 
         let outcome = await client.fetch(url: item.url.absoluteString, method: "GET",
-                                         userAgent: config.userAgent, timeout: config.timeout)
+                                         userAgent: config.effectiveUserAgent, timeout: config.timeout,
+                                         headers: config.requestHeaders)
 
         switch outcome {
         case .failure(let kind):
@@ -255,12 +265,53 @@ public actor CrawlEngine {
 
             var facts: PageFacts?
             var bodyGz: Data?
+            var render: RenderOutcome?
             let isHTML = response.contentType?.contains("html") == true
 
-            if isHTML, let body = response.body, !body.isEmpty {
-                let html = String(decoding: body, as: UTF8.self)
-                facts = try? parser.parse(html: html)
+            if !isHTML, let body = response.body, !body.isEmpty,
+               PDFFacts.isPDF(contentType: response.contentType, body: body) {
+                // A PDF is a page a search engine indexes, so it gets the same
+                // title and word-count treatment rather than being recorded as
+                // an untitled binary. Its links are not followed: extracting
+                // them is a separate feature, and guessing would be worse than
+                // not doing it.
+                facts = PDFFacts.parse(body)
                 if retainBodies { bodyGz = Gzip.compress(body) }
+            } else if isHTML, let body = response.body, !body.isEmpty {
+                // Not a bare UTF-8 decode: a Windows-1252 page decoded as UTF-8
+                // yields a mangled title, which the Titles report would then
+                // present as a real finding. See TextDecoding.
+                let html = TextDecoding.decode(body, contentType: response.contentType)
+                facts = try? parser.parse(html: html, extractions: config.extractions)
+                if retainBodies { bodyGz = Gzip.compress(body) }
+
+                if config.renderJavaScript, let renderer, !item.checkOnly {
+                    // The static parse above is kept whatever happens next. A
+                    // render that fails leaves the page exactly as a non-rendered
+                    // crawl would have it, rather than losing it — the same rule
+                    // the rest of the crawler follows: never die from a bad page.
+                    if let rendered = try? await renderer.render(
+                        url: item.url.absoluteString,
+                        timeout: config.renderTimeout, settleMs: config.renderSettleMs,
+                        scripts: config.javaScriptExtractions),
+                       let renderedFacts = try? parser.parse(html: rendered.html,
+                                                             extractions: config.extractions) {
+                        render = RenderOutcome(elapsedMs: rendered.elapsedMs,
+                                               errors: rendered.errors,
+                                               renderedWords: renderedFacts.wordCount,
+                                               staticWords: facts?.wordCount ?? 0,
+                                               metrics: rendered.metrics)
+                        var merged = renderedFacts
+                        // JavaScript results join the CSS-selector extractions,
+                        // so both kinds land in the same tab and the same export.
+                        for (name, value) in rendered.scriptResults.sorted(by: { $0.key < $1.key }) {
+                            merged.extractions.append(
+                                ExtractionFact(name: name, value: value, position: 0))
+                        }
+                        facts = merged
+                        if retainBodies { bodyGz = Gzip.compress(Data(rendered.html.utf8)) }
+                    }
+                }
             }
 
             return CrawlResult(
@@ -270,7 +321,8 @@ public actor CrawlEngine {
                 contentLength: response.body?.count,
                 responseTimeMs: response.elapsedMs,
                 redirectTarget: redirectTarget, bodyGz: bodyGz,
-                xRobotsTag: response.header("x-robots-tag"), facts: facts
+                xRobotsTag: response.header("x-robots-tag"), headers: response.headers,
+                render: render, facts: facts
             )
         }
     }

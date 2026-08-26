@@ -26,6 +26,24 @@ public enum RobotsFetchOutcome: Sendable, Equatable {
     case unreachable(reason: String)
 }
 
+/// What the sitemap pass found, so a caller can explain a crawl that started
+/// from a sitemap which turned out to be empty or unreachable.
+public struct SitemapOutcome: Sendable, Equatable {
+    public let fetched: Int
+    public let urls: Int
+    public let queued: Int
+    public let failed: [String]
+
+    public var isEmpty: Bool { fetched == 0 }
+
+    public init(fetched: Int, urls: Int, queued: Int, failed: [String]) {
+        self.fetched = fetched
+        self.urls = urls
+        self.queued = queued
+        self.failed = failed
+    }
+}
+
 public enum CrawlSession {
     /// Bound on how many redirect hops `fetchRobots` will follow before giving up.
     /// robots.txt redirects are ordinarily one hop (bare host → canonical host, or
@@ -61,7 +79,8 @@ public enum CrawlSession {
         var currentURL = robotsURL
         for hop in 0...robotsRedirectHopLimit {
             let outcome = await client.fetch(url: currentURL.absoluteString, method: "GET",
-                                             userAgent: config.userAgent, timeout: config.timeout)
+                                             userAgent: config.effectiveUserAgent, timeout: config.timeout,
+                                         headers: config.requestHeaders)
             switch outcome {
             case .response(let response):
                 if response.status == 200, let body = response.body {
@@ -96,12 +115,57 @@ public enum CrawlSession {
     /// Creates the database, seeds the frontier, and fetches robots.txt, then
     /// hands back an engine that has NOT been run. The caller owns the task, so
     /// it can pause, resume, or cancel while the crawl is underway.
+    /// Fetches the sitemaps a crawl should start from: those configured
+    /// explicitly, plus any robots.txt announced.
+    ///
+    /// A sitemap index is followed one level at a time, bounded by
+    /// `config.maxSitemaps`, because an index is allowed to point at another
+    /// index and nothing stops that being a cycle. Already-seen URLs are
+    /// skipped, which is what actually breaks such a cycle.
+    static func collectSitemapURLs(
+        starting: [String], client: HTTPClient, config: CrawlConfig
+    ) async -> (urls: [NormalizedURL], fetched: Int, failed: [String]) {
+        var pending = starting
+        var seen = Set<String>()
+        var collected: [NormalizedURL] = []
+        var found = Set<Data>()
+        var fetched = 0
+        var failed: [String] = []
+
+        while !pending.isEmpty, fetched < config.maxSitemaps {
+            let next = pending.removeFirst()
+            guard seen.insert(next).inserted else { continue }
+            fetched += 1
+
+            let outcome = await client.fetch(url: next, method: "GET",
+                                             userAgent: config.effectiveUserAgent, timeout: config.timeout,
+                                         headers: config.requestHeaders)
+            guard case .response(let response) = outcome,
+                  response.status == 200, let body = response.body, !body.isEmpty
+            else {
+                failed.append(next)
+                continue
+            }
+            let document = SitemapParser.parse(body)
+            if document.isEmpty { failed.append(next) }
+            pending.append(contentsOf: document.sitemaps)
+            for raw in document.urls {
+                guard let url = URLNormalizer.normalize(raw, relativeTo: nil),
+                      found.insert(url.sha256).inserted else { continue }
+                collected.append(url)
+            }
+        }
+        return (collected, fetched, failed)
+    }
+
     public static func prepare(
         dbPath: String?,
         config: CrawlConfig,
         client: HTTPClient,
-        parser: PageParser
-    ) async throws -> (engine: CrawlEngine, store: Store, robotsOutcome: RobotsFetchOutcome) {
+        parser: PageParser,
+        renderer: PageRenderer? = nil
+    ) async throws -> (engine: CrawlEngine, store: Store, robotsOutcome: RobotsFetchOutcome,
+                       sitemap: SitemapOutcome) {
         guard let seed = URLNormalizer.normalize(config.seedURL, relativeTo: nil) else {
             throw CrawlSessionError.invalidSeedURL(config.seedURL)
         }
@@ -109,12 +173,49 @@ public enum CrawlSession {
         let store = try Store(path: dbPath)
         try store.migrate()
         try store.initializeCrawl(config: config, startedAt: Date())
-        _ = try store.insertURLIfNew(seed, depth: 0, isInternal: true, discoveredAt: Date())
+        let now = Date()
+        _ = try store.insertURLIfNew(seed, depth: 0, isInternal: true, discoveredAt: now)
 
+        // Any extra URLs the caller supplied, at depth 0 alongside the seed.
+        for entry in config.seedList {
+            guard let url = URLNormalizer.normalize(entry, relativeTo: nil) else { continue }
+            _ = try store.insertURLIfNew(url, depth: 0,
+                                         isInternal: Store.isInternal(url, seedHost: config.seedHost,
+                                                                      config: config),
+                                         discoveredAt: now)
+        }
+
+        // Log in before anything is fetched, including robots.txt: a site
+        // behind a login serves the login page for every URL until there is a
+        // session, and a robots.txt that came back as a login form would be
+        // parsed as "disallow nothing" or "disallow everything" depending on
+        // its markup — either way, a lie.
+        var config = config
+        if let login = config.login, let renderer {
+            if let result = try? await renderer.logIn(login, timeout: config.renderTimeout),
+               !result.cookieHeader.isEmpty {
+                config.extraHeaders["Cookie"] = result.cookieHeader
+            }
+        }
+
+        // Robots first: its `Sitemap:` directives are one of the two sources of
+        // sitemaps, and its rules govern whether they may be crawled at all.
         let (robots, outcome) = await fetchRobots(for: seed, client: client, config: config)
+
+        var sitemapStart = config.sitemapURLs
+        if config.discoverSitemaps { sitemapStart.append(contentsOf: robots.sitemaps) }
+        var sitemapReport = SitemapOutcome(fetched: 0, urls: 0, queued: 0, failed: [])
+        if !sitemapStart.isEmpty {
+            let collected = await collectSitemapURLs(starting: sitemapStart, client: client,
+                                                     config: config)
+            let queued = try store.seedFromSitemap(collected.urls, config: config, now: now)
+            sitemapReport = SitemapOutcome(fetched: collected.fetched, urls: collected.urls.count,
+                                           queued: queued, failed: collected.failed)
+        }
+
         let engine = CrawlEngine(store: store, client: client, parser: parser,
-                                 config: config, robots: robots)
-        return (engine, store, outcome)
+                                 config: config, robots: robots, renderer: renderer)
+        return (engine, store, outcome, sitemapReport)
     }
 
     /// Creates the database, seeds the frontier, fetches robots, and runs the crawl to completion.
@@ -129,10 +230,11 @@ public enum CrawlSession {
         config: CrawlConfig,
         client: HTTPClient,
         parser: PageParser,
+        renderer: PageRenderer? = nil,
         onProgress: (@Sendable (CrawlProgress) -> Void)?
     ) async throws -> (store: Store, robotsOutcome: RobotsFetchOutcome) {
-        let (engine, store, outcome) = try await prepare(
-            dbPath: dbPath, config: config, client: client, parser: parser
+        let (engine, store, outcome, _) = try await prepare(
+            dbPath: dbPath, config: config, client: client, parser: parser, renderer: renderer
         )
         try await engine.run(onProgress: onProgress)
         return (store, outcome)

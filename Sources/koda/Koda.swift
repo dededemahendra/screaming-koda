@@ -1,6 +1,7 @@
 import ArgumentParser
 import Foundation
 import KodaCore
+import KodaRender
 
 @main
 struct Koda: AsyncParsableCommand {
@@ -8,7 +9,7 @@ struct Koda: AsyncParsableCommand {
         commandName: "koda",
         abstract: "Crawl a site and report on it.",
         version: KodaCoreInfo.versionString,
-        subcommands: [Crawl.self],
+        subcommands: [Crawl.self, Export.self, Compare.self, Enrich.self, Schedule.self],
         defaultSubcommand: Crawl.self
     )
 }
@@ -34,12 +35,123 @@ struct Crawl: AsyncParsableCommand {
     @Flag(name: .long, help: "Ignore robots.txt. Use only on sites you control.")
     var ignoreRobots = false
 
+    @Option(name: .long, help: "Sitemap URL to seed from. Repeatable.")
+    var sitemap: [String] = []
+
+    @Flag(name: .long, help: "Do not read Sitemap: directives from robots.txt.")
+    var noSitemapDiscovery = false
+
+    @Flag(name: .long, help: "Crawl only the seed and sitemap URLs, following no links.")
+    var listMode = false
+
+    @Flag(name: .long, help: "Status-check stylesheets and scripts too.")
+    var checkResources = false
+
+    @Option(name: .long, help: "HTTP Basic user for a protected site.")
+    var user: String?
+
+    @Option(name: .long, help: "HTTP Basic password.")
+    var password: String?
+
+    @Option(name: .long, help: "Log in at this URL before crawling. Needs --render.")
+    var loginURL: String?
+
+    @Option(name: .long, help: "Extra request header as Name:Value. Repeatable.")
+    var header: [String] = []
+
+    @Flag(name: .long, help: "Render pages in a browser engine before parsing. Much slower.")
+    var render = false
+
+    @Flag(name: .long, help: "Crawl as a phone: mobile user agent and viewport.")
+    var mobile = false
+
+    @Option(name: .long, help: "Response header to record for every page. Repeatable.")
+    var extractHeader: [String] = []
+
+    @Option(name: .long, help: "CSS extraction as Name=selector. Repeatable.")
+    var css: [String] = []
+
+    @Option(name: .long, help: "XPath extraction as Name=expression. Repeatable.")
+    var xpath: [String] = []
+
+    @Option(name: .long, help: "How many pages may render at once.")
+    var renderConcurrency: Int = 2
+
+    @Option(name: .long, help: "JavaScript extraction as Name=expression. Needs --render. Repeatable.")
+    var js: [String] = []
+
     mutating func run() async throws {
         var config = CrawlConfig(seedURL: url)
         config.workers = workers
         config.urlCap = limit
         config.maxDepth = maxDepth
         config.respectRobots = !ignoreRobots
+        config.sitemapURLs = sitemap
+        config.discoverSitemaps = !noSitemapDiscovery
+        config.listModeOnly = listMode
+        config.checkResources = checkResources
+        config.renderJavaScript = render
+        config.mobile = mobile
+        config.headerExtractions = extractHeader
+        for (label, entries, engine) in [("--css", css, ExtractionEngine.css),
+                                         ("--xpath", xpath, ExtractionEngine.xpath)] {
+            for entry in entries {
+                guard let split = entry.firstIndex(of: "=") else {
+                    throw ValidationError("\(label) must be Name=expression, not \(entry)")
+                }
+                let name = String(entry[..<split]).trimmingCharacters(in: .whitespaces)
+                let selector = String(entry[entry.index(after: split)...])
+                    .trimmingCharacters(in: .whitespaces)
+                guard !name.isEmpty, !selector.isEmpty else {
+                    throw ValidationError("\(label) must be Name=expression, not \(entry)")
+                }
+                config.extractions.append(
+                    ExtractionRule(name: name, selector: selector, engine: engine))
+            }
+        }
+        config.renderConcurrency = max(1, renderConcurrency)
+        for entry in js {
+            guard let split = entry.firstIndex(of: "=") else {
+                throw ValidationError("JavaScript extraction must be Name=expression, not \(entry)")
+            }
+            let name = String(entry[..<split]).trimmingCharacters(in: .whitespaces)
+            let expression = String(entry[entry.index(after: split)...])
+                .trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, !expression.isEmpty else {
+                throw ValidationError("JavaScript extraction must be Name=expression, not \(entry)")
+            }
+            config.javaScriptExtractions.append(ExtractionRule(name: name, selector: expression))
+        }
+        if !config.javaScriptExtractions.isEmpty && !render {
+            throw ValidationError("--js needs --render: there is no rendered DOM to evaluate against.")
+        }
+        if let loginURL {
+            guard render else {
+                throw ValidationError("--login-url needs --render: a form login is a page, "
+                    + "and driving it needs a browser.")
+            }
+            guard let user, let password else {
+                throw ValidationError("--login-url needs --user and --password.")
+            }
+            config.login = FormLogin(url: loginURL, username: user, password: password)
+            // The credentials are for the form, not for Basic auth; sending them
+            // as an Authorization header as well would be wrong.
+            config.basicAuthUser = ""
+            config.basicAuthPassword = ""
+        }
+        config.basicAuthUser = config.login == nil ? (user ?? "") : ""
+        config.basicAuthPassword = config.login == nil ? (password ?? "") : ""
+        for entry in header {
+            // Split on the first colon only: header values legitimately contain
+            // colons, as any URL-valued header does.
+            guard let split = entry.firstIndex(of: ":") else {
+                throw ValidationError("Header must be Name:Value, not \(entry)")
+            }
+            let name = String(entry[..<split]).trimmingCharacters(in: .whitespaces)
+            let value = String(entry[entry.index(after: split)...]).trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else { throw ValidationError("Header name is empty in \(entry)") }
+            config.extraHeaders[name] = value
+        }
 
         guard let host = config.seedHost else {
             throw ValidationError("Not a crawlable http(s) URL: \(url)")
@@ -62,6 +174,11 @@ struct Crawl: AsyncParsableCommand {
         let (store, robotsOutcome) = try await CrawlSession.start(
             dbPath: path, config: config,
             client: URLSessionHTTPClient(), parser: SwiftSoupParser(),
+            // Constructed here, in the executable, and injected: KodaCore has no
+            // WebKit dependency and cannot build one itself.
+            renderer: render ? WebKitRenderer(poolSize: config.renderConcurrency,
+                                              mobile: config.mobile,
+                                              userAgent: config.effectiveUserAgent) : nil,
             onProgress: { progress in
                 FileHandle.standardError.write(
                     Data("\rcrawled \(progress.crawled)  queued \(progress.queued)".utf8)
@@ -181,5 +298,347 @@ struct Crawl: AsyncParsableCommand {
         line("Missing meta descriptions", s.missingDescriptions)
         line("Missing H1", s.missingH1)
         line("Images missing alt", s.imagesMissingAlt)
+    }
+}
+
+
+struct Export: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Export a finished crawl to CSV or Excel.")
+
+    @Argument(help: "Path to a .koda database.")
+    var db: String
+
+    @Option(name: .long, help: "Output path. A file for xlsx, a directory for csv.")
+    var out: String?
+
+    @Option(name: .long, help: "csv or xlsx.")
+    var format: String = "xlsx"
+
+    @Option(name: .long, help: "Export one report by id. Omit for all eleven.")
+    var report: String?
+
+    mutating func run() async throws {
+        guard FileManager.default.fileExists(atPath: db) else {
+            throw ValidationError("No crawl database at \(db)")
+        }
+        guard ["csv", "xlsx"].contains(format) else {
+            throw ValidationError("Format must be csv or xlsx, not \(format)")
+        }
+
+        let store = try Store(path: db)
+        try store.migrate()
+
+        let reports: [Report]
+        if let report {
+            guard let match = Reports.all.first(where: { $0.id == report }) else {
+                throw ValidationError("Unknown report \(report). "
+                    + "Choose from: " + Reports.all.map(\.id).joined(separator: ", "))
+            }
+            reports = [match]
+        } else {
+            reports = Reports.all
+        }
+
+        // exportAll rather than mapping the reports: it leads with the crawl
+        // overview, which is what a whole-crawl export should open on. Asking
+        // for a single report skips it, since an overview of one report is just
+        // that report.
+        let exports = report == nil
+            ? try store.exportAll(reports: reports)
+            : try reports.map { try store.export(report: $0, filter: $0.defaultFilter) }
+        let base = (db as NSString).deletingPathExtension
+        let destination = out ?? (format == "xlsx" ? base + ".xlsx" : base + "-csv")
+
+        if format == "xlsx" {
+            try XLSXWriter.encode(exports).write(to: URL(fileURLWithPath: destination), options: .atomic)
+            Crawl.logLine("Wrote \(exports.count) sheet(s) to \(destination)")
+        } else if exports.count == 1 {
+            try CSVWriter.encode(exports[0]).write(to: URL(fileURLWithPath: destination), options: .atomic)
+            Crawl.logLine("Wrote \(destination)")
+        } else {
+            let directory = URL(fileURLWithPath: destination)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            for export in exports {
+                let name = export.name.lowercased().replacingOccurrences(of: " ", with: "-")
+                let url = directory.appendingPathComponent(name + ".csv")
+                try CSVWriter.encode(export).write(to: url, options: .atomic)
+            }
+            Crawl.logLine("Wrote \(exports.count) files to \(destination)")
+        }
+
+        for export in exports {
+            Crawl.logLine("  \(export.name): \(export.rows.count) rows")
+        }
+    }
+}
+
+
+struct Compare: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Compare a crawl against an earlier one.")
+
+    @Argument(help: "The current crawl.")
+    var current: String
+
+    @Argument(help: "The earlier crawl to compare it against.")
+    var previous: String
+
+    @Option(name: .long, help: "How many of each kind of change to list.")
+    var limit: Int = 500
+
+    @Flag(name: .long, help: "Write the changes as CSV to stdout instead of a summary.")
+    var csv = false
+
+    mutating func run() async throws {
+        guard FileManager.default.fileExists(atPath: current) else {
+            throw ValidationError("No crawl database at \(current)")
+        }
+        let store = try Store(path: current)
+        try store.migrate()
+        let diff = try store.compare(against: previous, limit: limit)
+
+        if csv {
+            let export = ReportExport(
+                name: "Changes",
+                headers: ["URL", "Field", "Before", "After"],
+                rows: diff.changes.map { [$0.url, $0.field, $0.before, $0.after] }
+                    + diff.added.map { [$0, "Added", nil, nil] }
+                    + diff.removed.map { [$0, "Removed", nil, nil] })
+            FileHandle.standardOutput.write(CSVWriter.encode(export, includeBOM: false))
+            return
+        }
+
+        Crawl.logLine("Comparing \(current)")
+        Crawl.logLine("     against \(previous)")
+        Crawl.logLine("")
+        if diff.isEmpty {
+            Crawl.logLine("No differences.")
+            return
+        }
+        Crawl.logLine("  Added    \(diff.addedTotal)")
+        Crawl.logLine("  Removed  \(diff.removedTotal)")
+        Crawl.logLine("  Changed  \(diff.changesTotal)")
+        Crawl.logLine("")
+
+        // Grouped by field, because "eleven titles changed" is the shape of the
+        // answer people want before any individual URL is.
+        let byField = Dictionary(grouping: diff.changes, by: \.field)
+        for field in byField.keys.sorted() {
+            Crawl.logLine("\(field): \(byField[field]?.count ?? 0)")
+            for change in (byField[field] ?? []).prefix(5) {
+                Crawl.logLine("  \(change.url)")
+                Crawl.logLine("    was: \(change.before ?? "—")")
+                Crawl.logLine("    now: \(change.after ?? "—")")
+            }
+            if (byField[field]?.count ?? 0) > 5 { Crawl.logLine("  …") }
+        }
+        for (label, list, total) in [("Added", diff.added, diff.addedTotal),
+                                     ("Removed", diff.removed, diff.removedTotal)]
+        where total > 0 {
+            Crawl.logLine("")
+            Crawl.logLine("\(label): \(total)")
+            for url in list.prefix(10) { Crawl.logLine("  \(url)") }
+            if total > 10 { Crawl.logLine("  …") }
+        }
+    }
+}
+
+
+struct Enrich: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Add data the crawl cannot know: search, analytics, backlinks, field performance.",
+        discussion: """
+            Credentials come from the environment, so a key never ends up in shell \
+            history or a crontab:
+
+              KODA_PAGESPEED_KEY, KODA_GOOGLE_CLIENT_ID, KODA_GOOGLE_CLIENT_SECRET,
+              KODA_GOOGLE_REFRESH_TOKEN, KODA_GSC_SITE, KODA_GA4_PROPERTY,
+              KODA_AHREFS_TOKEN, KODA_MAJESTIC_KEY, KODA_MOZ_ACCESS_ID, KODA_MOZ_SECRET
+
+            PageSpeed works without a key at a lower quota, so it is the one source \
+            that needs no setup at all.
+            """)
+
+    @Argument(help: "Path to a .koda database.")
+    var db: String
+
+    @Option(name: .long, help: "Which source: pagespeed, gsc, ga4, ahrefs, majestic, moz.")
+    var source: String = "pagespeed"
+
+    @Option(name: .long, help: "How many URLs to enrich.")
+    var limit: Int = 100
+
+    @Flag(name: .long, help: "List the sources that are configured and stop.")
+    var check = false
+
+    mutating func run() async throws {
+        let credentials = Enrich.credentialsFromEnvironment()
+
+        if check {
+            Crawl.logLine("Configured sources:")
+            for source in MetricSource.allCases {
+                let ready = credentials.availableSources.contains(source)
+                Crawl.logLine("  \(ready ? "yes" : " no") \(source.label)"
+                    + (ready ? "" : " — needs \(source.credentialHint)"))
+            }
+            return
+        }
+
+        guard let chosen = MetricSource(rawValue: source) else {
+            throw ValidationError("Unknown source \(source). Choose from: "
+                + MetricSource.allCases.map(\.rawValue).joined(separator: ", "))
+        }
+        guard credentials.availableSources.contains(chosen) else {
+            throw ValidationError("\(chosen.label) needs \(chosen.credentialHint). "
+                + "Run with --check to see what is configured.")
+        }
+        guard FileManager.default.fileExists(atPath: db) else {
+            throw ValidationError("No crawl database at \(db)")
+        }
+
+        let store = try Store(path: db)
+        try store.migrate()
+        Crawl.logLine("Enriching from \(chosen.label)…")
+        let result = try await Enrichment.run(
+            source: chosen, store: store, credentials: credentials,
+            client: URLSessionHTTPClient(), limit: limit,
+            onProgress: { done, total in
+                FileHandle.standardError.write(Data("\rurl \(done)/\(total)".utf8))
+            })
+        FileHandle.standardError.write(Data("\n".utf8))
+        Crawl.logLine("Stored \(result.stored) metrics.")
+        for failure in result.failures.prefix(5) { Crawl.logLine("  failed: \(failure)") }
+        if result.failures.count > 5 {
+            Crawl.logLine("  …and \(result.failures.count - 5) more.")
+        }
+    }
+
+    /// Read from the environment rather than taken as flags: a key on the
+    /// command line ends up in shell history and in the process list, where
+    /// anyone on the machine can read it.
+    static func credentialsFromEnvironment() -> ProviderCredentials {
+        let env = ProcessInfo.processInfo.environment
+        var out = ProviderCredentials()
+        out.pageSpeedKey = env["KODA_PAGESPEED_KEY"] ?? ""
+        out.googleClientID = env["KODA_GOOGLE_CLIENT_ID"] ?? ""
+        out.googleClientSecret = env["KODA_GOOGLE_CLIENT_SECRET"] ?? ""
+        out.googleRefreshToken = env["KODA_GOOGLE_REFRESH_TOKEN"] ?? ""
+        out.searchConsoleSite = env["KODA_GSC_SITE"] ?? ""
+        out.analyticsProperty = env["KODA_GA4_PROPERTY"] ?? ""
+        out.ahrefsToken = env["KODA_AHREFS_TOKEN"] ?? ""
+        out.majesticKey = env["KODA_MAJESTIC_KEY"] ?? ""
+        out.mozAccessID = env["KODA_MOZ_ACCESS_ID"] ?? ""
+        out.mozSecretKey = env["KODA_MOZ_SECRET"] ?? ""
+        return out
+    }
+}
+
+
+struct Schedule: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Run a crawl on a schedule, using launchd.",
+        discussion: """
+            launchd rather than a timer inside the app: a schedule that only runs \
+            while the app happens to be open is not a schedule. The job survives \
+            a reboot and runs whether or not anyone has opened Koda.
+            """)
+
+    @Option(name: .long, help: "Site to crawl.")
+    var url: String?
+
+    @Option(name: .long, help: "Where to write the crawl.")
+    var db: String?
+
+    @Option(name: .long, help: "Hour, 0 to 23, local time.")
+    var hour: Int = 3
+
+    @Option(name: .long, help: "Minute.")
+    var minute: Int = 0
+
+    @Option(name: .long, help: "Day of week, 0 Sunday to 6. Omit for every day.")
+    var weekday: Int?
+
+    @Flag(name: .long, help: "Do not write a workbook after each crawl.")
+    var noExport = false
+
+    @Flag(name: .long, help: "Print the launchd job instead of installing it.")
+    var dryRun = false
+
+    @Option(name: .long, help: "Remove an installed schedule by its id.")
+    var remove: String?
+
+    @Flag(name: .long, help: "List installed schedules.")
+    var list = false
+
+    mutating func run() async throws {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let agents = home.appendingPathComponent("Library/LaunchAgents")
+
+        if list {
+            let installed = (try? FileManager.default.contentsOfDirectory(atPath: agents.path))?
+                .filter { $0.hasPrefix("co.sistercreatives.koda.") } ?? []
+            if installed.isEmpty { Crawl.logLine("No schedules installed."); return }
+            for name in installed.sorted() { Crawl.logLine("  \(name)") }
+            return
+        }
+
+        if let remove {
+            let path = agents.appendingPathComponent("co.sistercreatives.koda.\(remove).plist")
+            guard FileManager.default.fileExists(atPath: path.path) else {
+                throw ValidationError("No schedule with id \(remove).")
+            }
+            _ = try? Schedule.launchctl(["bootout", "gui/\(getuid())/co.sistercreatives.koda.\(remove)"])
+            try FileManager.default.removeItem(at: path)
+            Crawl.logLine("Removed \(remove).")
+            return
+        }
+
+        guard let url, let db else {
+            throw ValidationError("--url and --db are needed to create a schedule.")
+        }
+        let schedule = CrawlSchedule(seedURL: url, hour: hour, minute: minute,
+                                     weekday: weekday, databasePath: db,
+                                     exportAfterwards: !noExport)
+        guard schedule.problems.isEmpty else {
+            throw ValidationError(schedule.problems.joined(separator: "\n"))
+        }
+
+        let binary = CommandLine.arguments[0].hasPrefix("/")
+            ? CommandLine.arguments[0]
+            : FileManager.default.currentDirectoryPath + "/" + CommandLine.arguments[0]
+        let logs = home.appendingPathComponent("Library/Logs/ScreamingKoda")
+        let text = ScheduleWriter.plist(schedule, binary: binary, logDirectory: logs.path)
+
+        if dryRun {
+            print(text)
+            return
+        }
+
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        let path = ScheduleWriter.agentPath(schedule, home: home)
+        try text.write(to: path, atomically: true, encoding: .utf8)
+        // Loaded immediately so the schedule is live now rather than after the
+        // next login, which is what someone setting one up expects.
+        _ = try? Schedule.launchctl(["bootstrap", "gui/\(getuid())", path.path])
+
+        Crawl.logLine("Scheduled: \(schedule.summary)")
+        Crawl.logLine("  id      \(schedule.id)")
+        Crawl.logLine("  agent   \(path.path)")
+        Crawl.logLine("  log     \(logs.path)/\(schedule.id).log")
+        Crawl.logLine("Remove it with: koda schedule --remove \(schedule.id)")
+    }
+
+    @discardableResult
+    static func launchctl(_ arguments: [String]) throws -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = arguments
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
     }
 }

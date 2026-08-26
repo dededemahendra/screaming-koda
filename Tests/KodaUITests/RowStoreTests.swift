@@ -40,7 +40,8 @@ private func seededStore(pages: Int) throws -> Store {
 @Test func countMatchesTheNumberOfRows() throws {
     let store = try seededStore(pages: 37)
     let index = RowIndex(store: store)
-    index.rebuild(sort: .discoveryOrder, ascending: true)
+    index.rebuild(report: Reports.internalURLs, filter: Reports.internalURLs.defaultFilter,
+                  sortColumnID: nil, ascending: true)
     let rows = RowStore(store: store, index: index)
     rows.refresh()
     #expect(rows.count == 37)
@@ -50,7 +51,8 @@ private func seededStore(pages: Int) throws -> Store {
 @Test func countAgreesWithSummaryTotalURLs() throws {
     let store = try seededStore(pages: 25)
     let index = RowIndex(store: store)
-    index.rebuild(sort: .discoveryOrder, ascending: true)
+    index.rebuild(report: Reports.internalURLs, filter: Reports.internalURLs.defaultFilter,
+                  sortColumnID: nil, ascending: true)
     let rows = RowStore(store: store, index: index)
     rows.refresh()
     let totalURLs = try store.summary().totalURLs
@@ -62,15 +64,16 @@ private func seededStore(pages: Int) throws -> Store {
 @Test func returnsTheCorrectRowAtEachIndex() throws {
     let store = try seededStore(pages: 10)
     let index = RowIndex(store: store)
-    index.rebuild(sort: .discoveryOrder, ascending: true)
+    index.rebuild(report: Reports.internalURLs, filter: Reports.internalURLs.defaultFilter,
+                  sortColumnID: nil, ascending: true)
     let rows = RowStore(store: store, index: index)
     rows.refresh()
-    #expect(rows.row(at: 0)?.title == "T0")
-    #expect(rows.row(at: 4)?.title == "T4")
-    #expect(rows.row(at: 9)?.title == "T9")
-    #expect(rows.row(at: 0)?.address == "https://rows.test/p/0")
-    #expect(rows.row(at: 3)?.status == 200)
-    #expect(rows.row(at: 6)?.depth == 6 % 4)
+    #expect(rows.value("title", at: 0) == "T0")
+    #expect(rows.value("title", at: 4) == "T4")
+    #expect(rows.value("title", at: 9) == "T9")
+    #expect(rows.value("address", at: 0) == "https://rows.test/p/0")
+    #expect(rows.value("status", at: 3) == "200")
+    #expect(rows.value("depth", at: 6) == String(6 % 4))
 }
 
 @MainActor
@@ -78,11 +81,12 @@ private func seededStore(pages: Int) throws -> Store {
     // pageSize 5 means indices 4/5 and 9/10 straddle page edges.
     let store = try seededStore(pages: 23)
     let index = RowIndex(store: store)
-    index.rebuild(sort: .discoveryOrder, ascending: true)
+    index.rebuild(report: Reports.internalURLs, filter: Reports.internalURLs.defaultFilter,
+                  sortColumnID: nil, ascending: true)
     let rows = RowStore(store: store, index: index, pageSize: 5, maxPages: 10)
     rows.refresh()
     for i in 0..<23 {
-        #expect(rows.row(at: i)?.title == "T\(i)", "wrong row at index \(i)")
+        #expect(rows.value("title", at: i) == "T\(i)", "wrong row at index \(i)")
     }
 }
 
@@ -91,22 +95,24 @@ private func seededStore(pages: Int) throws -> Store {
     // 40 rows over 4-row pages with only 2 pages resident forces eviction.
     let store = try seededStore(pages: 40)
     let index = RowIndex(store: store)
-    index.rebuild(sort: .discoveryOrder, ascending: true)
+    index.rebuild(report: Reports.internalURLs, filter: Reports.internalURLs.defaultFilter,
+                  sortColumnID: nil, ascending: true)
     let rows = RowStore(store: store, index: index, pageSize: 4, maxPages: 2)
     rows.refresh()
     for i in stride(from: 0, to: 40, by: 1) {
-        #expect(rows.row(at: i)?.title == "T\(i)")
+        #expect(rows.value("title", at: i) == "T\(i)")
     }
     // Re-read an early page that must have been evicted.
-    #expect(rows.row(at: 0)?.title == "T0")
-    #expect(rows.row(at: 39)?.title == "T39")
+    #expect(rows.value("title", at: 0) == "T0")
+    #expect(rows.value("title", at: 39) == "T39")
 }
 
 @MainActor
 @Test func outOfRangeIndexesReturnNil() throws {
     let store = try seededStore(pages: 3)
     let index = RowIndex(store: store)
-    index.rebuild(sort: .discoveryOrder, ascending: true)
+    index.rebuild(report: Reports.internalURLs, filter: Reports.internalURLs.defaultFilter,
+                  sortColumnID: nil, ascending: true)
     let rows = RowStore(store: store, index: index)
     rows.refresh()
     #expect(rows.row(at: 3) == nil)
@@ -118,7 +124,8 @@ private func seededStore(pages: Int) throws -> Store {
 @Test func refreshPicksUpRowsAddedAfterwards() throws {
     let store = try seededStore(pages: 5)
     let index = RowIndex(store: store)
-    index.rebuild(sort: .discoveryOrder, ascending: true)
+    index.rebuild(report: Reports.internalURLs, filter: Reports.internalURLs.defaultFilter,
+                  sortColumnID: nil, ascending: true)
     let rows = RowStore(store: store, index: index)
     rows.refresh()
     #expect(rows.count == 5)
@@ -144,7 +151,7 @@ private func seededStore(pages: Int) throws -> Store {
     index.appendNewIds()
     rows.refresh()
     #expect(rows.count == 6, "a live crawl adds rows; the index picks them up and the store shows them")
-    #expect(rows.row(at: 5)?.title == "T99")
+    #expect(rows.value("title", at: 5) == "T99")
 }
 
 @MainActor
@@ -162,10 +169,12 @@ private func seededStore(pages: Int) throws -> Store {
         try db.execute(sql: "INSERT INTO links (from_url_id, to_url_id, anchor_text, rel, is_internal, position) VALUES (1,?,'q',NULL,1,0)", arguments: [id])
     }
     let index = RowIndex(store: store)
-    index.rebuild(sort: .discoveryOrder, ascending: true)
+    index.rebuild(report: Reports.internalURLs, filter: Reports.internalURLs.defaultFilter,
+                  sortColumnID: nil, ascending: true)
     let rows = RowStore(store: store, index: index)
     rows.refresh()
-    #expect(rows.row(at: 2)?.status == nil, "a queued-but-unfetched URL has no status yet")
+    #expect(rows.row(at: 2) != nil, "the row itself exists")
+    #expect(rows.value("status", at: 2) == nil, "a queued-but-unfetched URL has no status yet")
 }
 
 @MainActor
@@ -179,7 +188,8 @@ private func seededStore(pages: Int) throws -> Store {
     // tell a cache hit from a reload without reaching into private state.
     let store = try seededStore(pages: 12)
     let index = RowIndex(store: store)
-    index.rebuild(sort: .discoveryOrder, ascending: true)
+    index.rebuild(report: Reports.internalURLs, filter: Reports.internalURLs.defaultFilter,
+                  sortColumnID: nil, ascending: true)
     let rows = RowStore(store: store, index: index, pageSize: 4, maxPages: 2)
     rows.refresh()
 
@@ -196,12 +206,12 @@ private func seededStore(pages: Int) throws -> Store {
     #expect(rows.loadCount == 3)
 
     let countBeforeRereadingPage0 = rows.loadCount
-    #expect(rows.row(at: 0)?.title == "T0", "page 0 was hot; it must still be cached")
+    #expect(rows.value("title", at: 0) == "T0", "page 0 was hot; it must still be cached")
     #expect(rows.loadCount == countBeforeRereadingPage0,
             "re-reading the recently-hit page must be a cache hit, not a reload")
 
     let countBeforeRereadingPage1 = rows.loadCount
-    #expect(rows.row(at: 4)?.title == "T4", "page 1 was cold; it must have been evicted")
+    #expect(rows.value("title", at: 4) == "T4", "page 1 was cold; it must have been evicted")
     #expect(rows.loadCount == countBeforeRereadingPage1 + 1,
             "re-reading the untouched page must require a reload")
 }
@@ -210,11 +220,12 @@ private func seededStore(pages: Int) throws -> Store {
 @Test func rowsComeBackInTheIndexsOrderNotTheDatabasesOrder() throws {
     let store = try seededStore(pages: 10)
     let index = RowIndex(store: store)
-    index.rebuild(sort: .address, ascending: false)   // reverse alphabetical
+    index.rebuild(report: Reports.internalURLs, filter: Reports.internalURLs.defaultFilter,
+                  sortColumnID: "address", ascending: false)   // reverse alphabetical
     let rows = RowStore(store: store, index: index)
     rows.refresh()
 
-    let addresses = (0..<rows.count).compactMap { rows.row(at: $0)?.address }
+    let addresses = (0..<rows.count).compactMap { rows.value("address", at: $0) }
     #expect(addresses == addresses.sorted(by: >),
             "SQL `IN` does not preserve order; RowStore must reorder to match the index")
 }
@@ -223,7 +234,8 @@ private func seededStore(pages: Int) throws -> Store {
 @Test func countComesFromTheIndex() throws {
     let store = try seededStore(pages: 7)
     let index = RowIndex(store: store)
-    index.rebuild(sort: .discoveryOrder, ascending: true)
+    index.rebuild(report: Reports.internalURLs, filter: Reports.internalURLs.defaultFilter,
+                  sortColumnID: nil, ascending: true)
     let rows = RowStore(store: store, index: index)
     rows.refresh()
     #expect(rows.count == 7)
@@ -235,12 +247,13 @@ private func seededStore(pages: Int) throws -> Store {
     // The point of the index: row 4,999 costs the same as row 0.
     let store = try seededStore(pages: 5_000)
     let index = RowIndex(store: store)
-    index.rebuild(sort: .discoveryOrder, ascending: true)
+    index.rebuild(report: Reports.internalURLs, filter: Reports.internalURLs.defaultFilter,
+                  sortColumnID: nil, ascending: true)
     let rows = RowStore(store: store, index: index)
     rows.refresh()
 
-    #expect(rows.row(at: 4_999)?.title == "T4999")
-    #expect(rows.row(at: 0)?.title == "T0")
+    #expect(rows.value("title", at: 4_999) == "T4999")
+    #expect(rows.value("title", at: 0) == "T0")
 }
 
 @MainActor
@@ -249,13 +262,15 @@ private func seededStore(pages: Int) throws -> Store {
     let index = RowIndex(store: store)
     let rows = RowStore(store: store, index: index)
 
-    index.rebuild(sort: .address, ascending: true)
+    index.rebuild(report: Reports.internalURLs, filter: Reports.internalURLs.defaultFilter,
+                  sortColumnID: "address", ascending: true)
     rows.refresh()
-    let ascendingFirst = rows.row(at: 0)?.address
+    let ascendingFirst = rows.value("address", at: 0)
 
-    index.rebuild(sort: .address, ascending: false)
+    index.rebuild(report: Reports.internalURLs, filter: Reports.internalURLs.defaultFilter,
+                  sortColumnID: "address", ascending: false)
     rows.refresh()
-    let descendingFirst = rows.row(at: 0)?.address
+    let descendingFirst = rows.value("address", at: 0)
 
     #expect(ascendingFirst != descendingFirst)
 }
