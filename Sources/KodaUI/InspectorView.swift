@@ -222,7 +222,7 @@ public struct InspectorView: View {
     private func truncationNotice(_ shown: Int, _ total: Int) -> some View {
         if shown < total {
             Text("Showing the first \(shown) of \(total).")
-                .font(Theme.Face.label)
+                .font(Theme.Numeral.label)
                 .foregroundStyle(Theme.Ink.quiet.color)
                 .padding(.bottom, Theme.Space.tight)
         }
