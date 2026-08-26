@@ -111,6 +111,15 @@ Sitemap: https://example.com/sitemap.xml
     }
 }
 
+@Test func disallowedQueryStringIsRespected() {
+    // Faceted navigation is why large sites have a robots.txt at all, and those
+    // rules only ever match query strings — matching the path alone would ignore
+    // every one of them.
+    let r = RobotsRules.parse("User-agent: *\nDisallow: /*?sort=")
+    let url = URLNormalizer.normalize("http://example.com/shop?sort=price", relativeTo: nil)!
+    #expect(!r.isAllowed(path: url.pathWithQuery, userAgent: "Bot"))
+}
+
 @Test func unrecognizedDirectiveBetweenUserAgentLinesDoesNotSplitGroup() {
     let text = """
     User-agent: A

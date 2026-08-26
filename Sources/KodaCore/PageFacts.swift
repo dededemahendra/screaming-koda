@@ -91,6 +91,11 @@ public struct PageFacts: Sendable {
     /// cannot answer "is this H2 duplicated" or "is it too long".
     public var h2: String?
     public var h2Count: Int = 0
+    /// The document's `<base href>`, if it declared one. Relative URLs in the
+    /// page resolve against this rather than against the page's own address.
+    /// Reported rather than applied: the parser is not told where the page came
+    /// from, so it cannot resolve anything.
+    public var baseHref: String?
     public var canonical: String?
     /// How many `<link rel=canonical>` elements the page declares. Only the
     /// first is followed, but a page declaring two is a real finding that was

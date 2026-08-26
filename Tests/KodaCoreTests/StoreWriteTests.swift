@@ -137,6 +137,25 @@ private func makeFacts(links: [LinkFact] = [], images: [ImageFact] = [], hreflan
     #expect(lang == "fr")
 }
 
+@Test func relativeLinksResolveAgainstDeclaredBaseHref() throws {
+    // A page declaring <base href> resolves its relative URLs against that, not
+    // against its own address — without this, "p/1" would land at
+    // https://example.com/p/1, an address the site never served.
+    let (store, config, id, url) = try seededStore()
+    var facts = makeFacts(links: [LinkFact(href: "p/1", anchor: "Product", rel: nil, position: 0)])
+    facts.baseHref = "https://example.com/shop/"
+    let result = CrawlResult(urlID: id, url: url, depth: 0, status: 200, errorKind: nil,
+                             contentType: "text/html", contentLength: 1, responseTimeMs: 1,
+                             redirectTarget: nil, bodyGz: nil, xRobotsTag: nil, facts: facts)
+    _ = try store.write(results: [result], config: config, now: Date())
+
+    let urls = try store.dbQueue.read { db in
+        try String.fetchAll(db, sql: "SELECT url FROM urls")
+    }
+    #expect(urls.contains("https://example.com/shop/p/1"))
+    #expect(!urls.contains("https://example.com/p/1"))
+}
+
 @Test func excludePatternsBlockDiscovery() throws {
     var (store, config, id, url) = try seededStore()
     config.exclude = ["/admin"]
