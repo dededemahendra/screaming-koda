@@ -103,9 +103,11 @@ public final class CrawlSettings: @unchecked Sendable {
     ///
     /// A pattern that will not compile is indistinguishable from one that
     /// matched nothing, so an invalid include pattern would crawl the seed
-    /// and stop, looking like a broken tool. This is the single choke point
-    /// every write to `CrawlController.config` from the settings window
-    /// passes through.
+    /// and stop, looking like a broken tool. The six text-buffer fields —
+    /// include and exclude patterns, sitemap URLs, extra headers and the
+    /// two extraction-rule lists — are reachable exclusively through this
+    /// gate, which is what keeps an invalid regular expression from ever
+    /// reaching the controller.
     public static func configToApply(_ candidate: CrawlConfig) -> CrawlConfig? {
         guard problems(in: candidate).isEmpty else { return nil }
         return clamped(candidate)
