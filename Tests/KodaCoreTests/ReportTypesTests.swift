@@ -14,7 +14,7 @@ private let sample = Report(
     ],
     filters: [
         ReportFilter(id: "all", name: "All", predicate: "1"),
-        ReportFilter(id: "missing", name: "Missing", predicate: "f.title IS NULL", isIssue: true),
+        ReportFilter(id: "missing", name: "Missing", predicate: "f.title IS NULL", severity: .breaksIndexing),
     ]
 )
 
@@ -40,7 +40,7 @@ private let sample = Report(
 }
 
 @Test func onlyIssueFiltersAreMarkedAsSuch() {
-    #expect(sample.filters.filter(\.isIssue).map(\.id) == ["missing"])
+    #expect(sample.filters.filter(\.isFinding).map(\.id) == ["missing"])
 }
 
 @Test func theSharedFromJoinsResponsesAndPageFactsLeft() {

@@ -64,6 +64,6 @@ public struct SidebarView: View {
     /// drawing the eye to.
     private func countColour(filter: ReportFilter, count: Int?) -> Color {
         guard let count, count > 0 else { return .secondary.opacity(0.5) }
-        return filter.isIssue ? .orange : .secondary
+        return filter.isFinding ? .orange : .secondary
     }
 }

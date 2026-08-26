@@ -80,7 +80,7 @@ import Testing
     let items = overview.rows.compactMap { $0.count > 1 ? $0[1] : nil }
     #expect(items.contains("Seed URL"))
     #expect(items.contains("Total"))
-    #expect(items.contains("Missing"), "the Titles report's missing-title count")
+    #expect(items.contains("Titles: Missing"), "the Titles report's missing-title count")
 }
 
 /// The workbook and the window read from the same counts, so they cannot
@@ -91,7 +91,7 @@ import Testing
     let overview = try store.overview()
 
     let missingTitles = overview.rows.first {
-        $0.count > 2 && $0[0] == "Titles" && $0[1] == "Missing"
+        $0.count > 2 && $0[0] == "Costs clicks" && $0[1] == "Titles: Missing"
     }
     #expect(missingTitles?[2] == String(counts["titles.missing"] ?? -1))
 }

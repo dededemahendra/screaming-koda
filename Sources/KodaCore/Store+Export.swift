@@ -82,13 +82,18 @@ extension Store {
         }
         rows.append(["Responses", "Transport errors", String(summary.transportErrors)])
 
-        // Only issue filters, and only the ones that found something: a summary
-        // listing 150 rows of zero is not a summary.
+        // Only findings, only the ones that found something, in the same order
+        // the window ranks them: a summary listing 150 rows of zero is not a
+        // summary, and one in report order buries the 5xx under the alt text.
         let counts = try counts(for: reports)
-        for report in reports {
-            for filter in report.filters where filter.isIssue {
-                let found = counts["\(report.id).\(filter.id)"] ?? 0
-                if found > 0 { rows.append([report.name, filter.name, String(found)]) }
+        for band in Severity.allCases {
+            for report in reports {
+                for filter in report.filters where filter.severity == band {
+                    let found = counts["\(report.id).\(filter.id)"] ?? 0
+                    if found > 0 {
+                        rows.append([band.title, "\(report.name): \(filter.name)", String(found)])
+                    }
+                }
             }
         }
         return ReportExport(name: "Overview",

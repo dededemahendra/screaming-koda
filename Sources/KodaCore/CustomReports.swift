@@ -227,7 +227,7 @@ public enum CustomReports {
                 ReportFilter(id: "all", name: "All", predicate: "1"),
                 ReportFilter(id: "matching", name: custom.name.isEmpty ? "Matching" : custom.name,
                              predicate: clauses.joined(separator: " AND "),
-                             arguments: arguments, isIssue: true),
+                             arguments: arguments, severity: .hygiene),
             ])
     }
 

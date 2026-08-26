@@ -44,18 +44,25 @@ public struct ReportFilter: Sendable, Identifiable, Equatable {
     public let predicate: String
     /// Values bound to the placeholders in `predicate`, in order.
     public let arguments: [String]
-    /// Whether this filter describes a problem. The sidebar surfaces counts for
-    /// issue filters; "All" is a navigation aid, not a finding.
-    public let isIssue: Bool
+    /// Which band this finding belongs to, or nil when the filter is not a
+    /// finding at all. "All" and "Success (2xx)" are navigation aids.
+    ///
+    /// An optional rather than a `Bool` plus a band: the two could contradict
+    /// each other, and a filter that claimed to be an issue with no band would
+    /// have nowhere to appear in the sidebar.
+    public let severity: Severity?
 
     public init(id: String, name: String, predicate: String,
-                arguments: [String] = [], isIssue: Bool = false) {
+                arguments: [String] = [], severity: Severity? = nil) {
         self.id = id
         self.name = name
         self.predicate = predicate
         self.arguments = arguments
-        self.isIssue = isIssue
+        self.severity = severity
     }
+
+    /// Whether this filter describes a problem at all.
+    public var isFinding: Bool { severity != nil }
 }
 
 public struct Report: Sendable, Identifiable, Equatable {

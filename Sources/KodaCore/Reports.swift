@@ -352,13 +352,13 @@ public enum Reports {
         filters: [
             allFilter,
             ReportFilter(id: "nonIndexable", name: "Non-indexable",
-                         predicate: Indexability.isNonIndexable, isIssue: true),
+                         predicate: Indexability.isNonIndexable, severity: .breaksIndexing),
             // Detected from markup, so a tag injected at runtime by another
             // script is invisible here — the same blind spot the crawler has
             // everywhere without a rendering step.
             ReportFilter(id: "noAnalytics", name: "No tracking detected", predicate: """
                 (\(htmlPage)) AND (f.analytics IS NULL OR trim(f.analytics) = '')
-                """, isIssue: true),
+                """, severity: .hygiene),
         ])
 
     public static let external = Report(
@@ -368,7 +368,7 @@ public enum Reports {
         filters: [
             allFilter,
             ReportFilter(id: "broken", name: "Broken",
-                         predicate: "r.status = 0 OR r.status >= 400", isIssue: true),
+                         predicate: "r.status = 0 OR r.status >= 400", severity: .breaksIndexing),
         ])
 
     public static let responseCodes = Report(
@@ -383,15 +383,15 @@ public enum Reports {
             ReportFilter(id: "redirection", name: "Redirection (3xx)",
                          predicate: "r.status BETWEEN 300 AND 399"),
             ReportFilter(id: "clientError", name: "Client error (4xx)",
-                         predicate: "r.status BETWEEN 400 AND 499", isIssue: true),
+                         predicate: "r.status BETWEEN 400 AND 499", severity: .breaksIndexing),
             ReportFilter(id: "serverError", name: "Server error (5xx)",
-                         predicate: "r.status >= 500", isIssue: true),
+                         predicate: "r.status >= 500", severity: .breaksIndexing),
             ReportFilter(id: "transportError", name: "No response",
-                         predicate: "r.status = 0", isIssue: true),
+                         predicate: "r.status = 0", severity: .breaksIndexing),
             // The row is the *destination*, not the chain: "you reached this URL
             // through two or more redirects, so the links pointing at it are stale."
             ReportFilter(id: "viaChain", name: "Reached via 2+ redirects",
-                         predicate: "u.redirect_hops >= 2", isIssue: true),
+                         predicate: "u.redirect_hops >= 2", severity: .breaksIndexing),
             // Catches a URL redirecting to itself, and a pair redirecting to each
             // other. A longer cycle is not detected here — it exceeds the hop cap
             // and is abandoned by the engine, so it surfaces under "Reached via
@@ -403,7 +403,7 @@ public enum Reports {
                   OR EXISTS (SELECT 1 FROM responses r2
                              WHERE r2.url_id = r.redirect_target_id AND r2.redirect_target_id = u.id)
                 )
-                """, isIssue: true),
+                """, severity: .breaksIndexing),
         ])
 
     public static let titles = Report(
@@ -413,22 +413,22 @@ public enum Reports {
                   Col.h1, Col.indexability],
         filters: [
             allFilter,
-            ReportFilter(id: "missing", name: "Missing", predicate: missing("title"), isIssue: true),
+            ReportFilter(id: "missing", name: "Missing", predicate: missing("title"), severity: .costsClicks),
             ReportFilter(id: "duplicate", name: "Duplicate",
-                         predicate: duplicated("title"), isIssue: true),
+                         predicate: duplicated("title"), severity: .costsClicks),
             ReportFilter(id: "over60", name: "Over 60 characters",
-                         predicate: "f.title_length > 60", isIssue: true),
+                         predicate: "f.title_length > 60", severity: .costsClicks),
             ReportFilter(id: "under30", name: "Under 30 characters",
-                         predicate: "f.title_length IS NOT NULL AND f.title_length < 30", isIssue: true),
-            ReportFilter(id: "multiple", name: "Multiple", predicate: "f.title_count > 1", isIssue: true),
+                         predicate: "f.title_length IS NOT NULL AND f.title_length < 30", severity: .costsClicks),
+            ReportFilter(id: "multiple", name: "Multiple", predicate: "f.title_count > 1", severity: .costsClicks),
             ReportFilter(id: "sameAsH1", name: "Same as H1", predicate: """
                 f.title IS NOT NULL AND f.h1 IS NOT NULL AND trim(f.title) = trim(f.h1)
-                """, isIssue: true),
+                """, severity: .costsClicks),
             // Pixels, not characters: twenty W's is four times the width of
             // twenty i's, and it is width that gets truncated.
             ReportFilter(id: "tooWide", name: "Wider than a result snippet",
                          predicate: "f.title_pixels > \(Int(SERPMetrics.titleLimit))",
-                         isIssue: true),
+                         severity: .costsClicks),
         ])
 
     public static let metaDescription = Report(
@@ -439,19 +439,19 @@ public enum Reports {
         filters: [
             allFilter,
             ReportFilter(id: "missing", name: "Missing",
-                         predicate: missing("meta_description"), isIssue: true),
+                         predicate: missing("meta_description"), severity: .costsClicks),
             ReportFilter(id: "duplicate", name: "Duplicate",
-                         predicate: duplicated("meta_description"), isIssue: true),
+                         predicate: duplicated("meta_description"), severity: .costsClicks),
             ReportFilter(id: "over155", name: "Over 155 characters",
-                         predicate: "f.meta_description_length > 155", isIssue: true),
+                         predicate: "f.meta_description_length > 155", severity: .costsClicks),
             ReportFilter(id: "under70", name: "Under 70 characters", predicate: """
                 f.meta_description_length IS NOT NULL AND f.meta_description_length < 70
-                """, isIssue: true),
+                """, severity: .costsClicks),
             ReportFilter(id: "multiple", name: "Multiple",
-                         predicate: "f.meta_description_count > 1", isIssue: true),
+                         predicate: "f.meta_description_count > 1", severity: .costsClicks),
             ReportFilter(id: "tooWide", name: "Wider than a result snippet",
                          predicate: "f.meta_description_pixels > \(Int(SERPMetrics.descriptionLimit))",
-                         isIssue: true),
+                         severity: .costsClicks),
         ])
 
     public static let headings = Report(
@@ -460,19 +460,19 @@ public enum Reports {
         columns: [Col.address, Col.h1, Col.h1Length, Col.h1Count, Col.h2, Col.h2Count, Col.title],
         filters: [
             allFilter,
-            ReportFilter(id: "missingH1", name: "Missing H1", predicate: missing("h1"), isIssue: true),
+            ReportFilter(id: "missingH1", name: "Missing H1", predicate: missing("h1"), severity: .hygiene),
             ReportFilter(id: "duplicateH1", name: "Duplicate H1",
-                         predicate: duplicated("h1"), isIssue: true),
+                         predicate: duplicated("h1"), severity: .hygiene),
             ReportFilter(id: "multipleH1", name: "Multiple H1",
-                         predicate: "f.h1_count > 1", isIssue: true),
+                         predicate: "f.h1_count > 1", severity: .hygiene),
             ReportFilter(id: "longH1", name: "H1 over 70 characters",
-                         predicate: "length(f.h1) > 70", isIssue: true),
+                         predicate: "length(f.h1) > 70", severity: .hygiene),
             ReportFilter(id: "missingH2", name: "Missing H2",
-                         predicate: "coalesce(f.h2_count, 0) = 0", isIssue: true),
+                         predicate: "coalesce(f.h2_count, 0) = 0", severity: .hygiene),
             ReportFilter(id: "duplicateH2", name: "Duplicate H2",
-                         predicate: duplicated("h2"), isIssue: true),
+                         predicate: duplicated("h2"), severity: .hygiene),
             ReportFilter(id: "longH2", name: "H2 over 70 characters",
-                         predicate: "length(f.h2) > 70", isIssue: true),
+                         predicate: "length(f.h2) > 70", severity: .hygiene),
         ])
 
     public static let images = Report(
@@ -485,17 +485,17 @@ public enum Reports {
             ReportFilter(id: "missingAlt", name: "Missing alt text", predicate: """
                 EXISTS (SELECT 1 FROM images i
                         WHERE i.src_url_id = u.id AND (i.alt IS NULL OR trim(i.alt) = ''))
-                """, isIssue: true),
+                """, severity: .hygiene),
             ReportFilter(id: "longAlt", name: "Alt over 100 characters", predicate: """
                 EXISTS (SELECT 1 FROM images i WHERE i.src_url_id = u.id AND length(i.alt) > 100)
-                """, isIssue: true),
+                """, severity: .hygiene),
             ReportFilter(id: "over100kb", name: "Over 100KB",
-                         predicate: "r.content_length > 102400", isIssue: true),
+                         predicate: "r.content_length > 102400", severity: .hygiene),
             // Undeclared dimensions are the usual cause of layout shift.
             ReportFilter(id: "noDimensions", name: "No declared dimensions", predicate: """
                 EXISTS (SELECT 1 FROM images i WHERE i.src_url_id = u.id
                         AND (i.width IS NULL OR i.height IS NULL))
-                """, isIssue: true),
+                """, severity: .hygiene),
         ])
 
     public static let canonicals = Report(
@@ -505,21 +505,21 @@ public enum Reports {
         filters: [
             allFilter,
             ReportFilter(id: "missing", name: "Missing",
-                         predicate: "f.canonical_id IS NULL", isIssue: true),
+                         predicate: "f.canonical_id IS NULL", severity: .hygiene),
             ReportFilter(id: "self", name: "Self-referencing",
                          predicate: "f.canonical_id = u.id"),
             ReportFilter(id: "canonicalised", name: "Canonicalised",
                          predicate: "f.canonical_id IS NOT NULL AND f.canonical_id != u.id",
-                         isIssue: true),
+                         severity: .breaksIndexing),
             ReportFilter(id: "toNon200", name: "To a non-200", predicate: """
                 f.canonical_id IS NOT NULL AND f.canonical_id != u.id AND EXISTS (
                   SELECT 1 FROM responses cr WHERE cr.url_id = f.canonical_id AND cr.status != 200
                 )
-                """, isIssue: true),
+                """, severity: .breaksIndexing),
             // Only the first canonical is followed, so a page declaring two is
             // silently having one of them ignored by every search engine.
             ReportFilter(id: "multiple", name: "Multiple",
-                         predicate: "f.canonical_count > 1", isIssue: true),
+                         predicate: "f.canonical_count > 1", severity: .breaksIndexing),
         ])
 
     public static let directives = Report(
@@ -529,18 +529,18 @@ public enum Reports {
         filters: [
             allFilter,
             ReportFilter(id: "noindex", name: "noindex",
-                         predicate: directive("noindex"), isIssue: true),
+                         predicate: directive("noindex"), severity: .breaksIndexing),
             ReportFilter(id: "nofollow", name: "nofollow",
-                         predicate: directive("nofollow"), isIssue: true),
+                         predicate: directive("nofollow"), severity: .hygiene),
             ReportFilter(id: "noarchive", name: "noarchive",
-                         predicate: directive("noarchive"), isIssue: true),
+                         predicate: directive("noarchive"), severity: .hygiene),
             // Both present and disagreeing about indexing. Google takes the most
             // restrictive, so the page is non-indexable and the markup says
             // otherwise — which is how these ship unnoticed.
             ReportFilter(id: "conflict", name: "X-Robots conflict", predicate: """
                 f.meta_robots IS NOT NULL AND f.x_robots_tag IS NOT NULL
                 AND (lower(f.meta_robots) LIKE '%noindex%') != (lower(f.x_robots_tag) LIKE '%noindex%')
-                """, isIssue: true),
+                """, severity: .breaksIndexing),
         ])
 
     public static let hreflang = Report(
@@ -556,19 +556,19 @@ public enum Reports {
                     WHERE h2.url_id = h.href_url_id AND h2.href_url_id = u.id
                   )
                 )
-                """, isIssue: true),
+                """, severity: .hygiene),
             ReportFilter(id: "non200", name: "Non-200 target", predicate: """
                 EXISTS (
                   SELECT 1 FROM hreflang h
                   LEFT JOIN responses hr ON hr.url_id = h.href_url_id
                   WHERE h.url_id = u.id AND (hr.status IS NULL OR hr.status != 200)
                 )
-                """, isIssue: true),
+                """, severity: .breaksIndexing),
             ReportFilter(id: "noXDefault", name: "Missing x-default", predicate: """
                 NOT EXISTS (
                   SELECT 1 FROM hreflang h WHERE h.url_id = u.id AND lower(h.lang) = 'x-default'
                 )
-                """, isIssue: true),
+                """, severity: .hygiene),
         ])
 
     /// What the crawler already knew and never said.
@@ -593,13 +593,13 @@ public enum Reports {
                   WHERE f2.content_hash = f.content_hash AND f2.url_id != u.id
                     AND u2.is_internal = 1 AND r2.status = 200
                 )
-                """, isIssue: true),
+                """, severity: .breaksIndexing),
             ReportFilter(id: "thin", name: "Under 200 words",
-                         predicate: "coalesce(f.word_count, 0) < 200", isIssue: true),
+                         predicate: "coalesce(f.word_count, 0) < 200", severity: .costsClicks),
             ReportFilter(id: "veryThin", name: "Under 50 words",
-                         predicate: "coalesce(f.word_count, 0) < 50", isIssue: true),
+                         predicate: "coalesce(f.word_count, 0) < 50", severity: .costsClicks),
             ReportFilter(id: "empty", name: "No content at all",
-                         predicate: "coalesce(f.word_count, 0) = 0", isIssue: true),
+                         predicate: "coalesce(f.word_count, 0) = 0", severity: .costsClicks),
             // Similar but not identical: two product pages differing by a price,
             // or a paginated series where only a heading changes. The exact-match
             // filter above cannot see these at all.
@@ -622,14 +622,14 @@ public enum Reports {
                     AND koda_hamming(f.simhash, f2.simhash) <= \(SimHash.nearThreshold)
                     AND f2.content_hash IS NOT f.content_hash
                 )
-                """, isIssue: true),
+                """, severity: .breaksIndexing),
             // Mostly markup. A low ratio is a smell rather than a verdict — a
             // heavily componentised page can be fine — but it is where bloated
             // templates and content-free pages both show up.
             ReportFilter(id: "lowTextRatio", name: "Under 10% text", predicate: """
                 coalesce(r.content_length, 0) > 0 AND f.text_length IS NOT NULL
                 AND (100.0 * f.text_length / r.content_length) < 10
-                """, isIssue: true),
+                """, severity: .hygiene),
         ])
 
     /// The shape of the URLs themselves, which is where a surprising share of
@@ -642,14 +642,14 @@ public enum Reports {
         filters: [
             allFilter,
             ReportFilter(id: "insecure", name: "Not HTTPS",
-                         predicate: "u.url NOT LIKE 'https://%'", isIssue: true),
+                         predicate: "u.url NOT LIKE 'https://%'", severity: .hygiene),
             // Only a finding when the crawl contains both forms: a site that is
             // consistently one or the other is fine, whichever it picked.
             ReportFilter(id: "mixedWWW", name: "Mixed www and non-www", predicate: """
                 EXISTS (SELECT 1 FROM urls u2 WHERE u2.is_internal = 1 AND (
                   (u.host LIKE 'www.%' AND u2.host = substr(u.host, 5))
                   OR (u.host NOT LIKE 'www.%' AND u2.host = 'www.' || u.host)))
-                """, isIssue: true),
+                """, severity: .hygiene),
             ReportFilter(id: "params", name: "Contains parameters",
                          predicate: "u.url LIKE '%?%'"),
             // Tracking parameters create an endless supply of distinct URLs for
@@ -659,15 +659,15 @@ public enum Reports {
                 lower(u.url) LIKE '%utm\\_%' ESCAPE '\\' OR lower(u.url) LIKE '%gclid=%'
                 OR lower(u.url) LIKE '%fbclid=%' OR lower(u.url) LIKE '%mc\\_cid=%' ESCAPE '\\'
                 OR lower(u.url) LIKE '%msclkid=%'
-                """, isIssue: true),
+                """, severity: .hygiene),
             ReportFilter(id: "sessionParams", name: "Session parameters", predicate: """
                 lower(u.url) LIKE '%sessionid=%' OR lower(u.url) LIKE '%phpsessid=%'
                 OR lower(u.url) LIKE '%jsessionid=%' OR lower(u.url) LIKE '%?sid=%'
                 OR lower(u.url) LIKE '%&sid=%'
-                """, isIssue: true),
+                """, severity: .hygiene),
             ReportFilter(id: "manyParams", name: "Three or more parameters", predicate: """
                 length(u.url) - length(replace(u.url, '&', '')) >= 2 AND u.url LIKE '%?%'
-                """, isIssue: true),
+                """, severity: .hygiene),
             // The pair that says a migration is unfinished: an http URL whose
             // https twin the crawl also found.
             ReportFilter(id: "httpWithHTTPSTwin", name: "HTTP page that also exists on HTTPS",
@@ -676,20 +676,20 @@ public enum Reports {
                   SELECT 1 FROM urls u2
                   WHERE u2.url = 'https://' || substr(u.url, 8)
                 )
-                """, isIssue: true),
+                """, severity: .hygiene),
             ReportFilter(id: "httpNoRedirect", name: "HTTP page that does not redirect",
                          predicate: """
                 u.url LIKE 'http://%' AND r.status IS NOT NULL
                 AND (r.status < 300 OR r.status >= 400)
-                """, isIssue: true),
+                """, severity: .hygiene),
             ReportFilter(id: "long", name: "Over 115 characters",
-                         predicate: "length(u.url) > 115", isIssue: true),
+                         predicate: "length(u.url) > 115", severity: .hygiene),
             // Uppercase in a path is a duplicate-content risk because most
             // servers treat paths case-sensitively and most links do not.
             ReportFilter(id: "uppercase", name: "Uppercase in path",
-                         predicate: "u.path != lower(u.path)", isIssue: true),
+                         predicate: "u.path != lower(u.path)", severity: .hygiene),
             ReportFilter(id: "underscore", name: "Underscores in path",
-                         predicate: "u.path LIKE '%\\_%' ESCAPE '\\'", isIssue: true),
+                         predicate: "u.path LIKE '%\\_%' ESCAPE '\\'", severity: .hygiene),
             ReportFilter(id: "encoded", name: "Percent-encoded",
                          predicate: "u.url LIKE '%\\%%' ESCAPE '\\'"),
             // The normaliser deliberately preserves trailing slashes, since they
@@ -700,7 +700,7 @@ public enum Reports {
                 EXISTS (SELECT 1 FROM urls u2 WHERE u2.is_internal = 1 AND u2.id != u.id
                         AND u2.url = CASE WHEN u.url LIKE '%/' THEN substr(u.url, 1, length(u.url) - 1)
                                           ELSE u.url || '/' END)
-                """, isIssue: true),
+                """, severity: .hygiene),
         ])
 
     /// Keyed on the URL being linked *to*, so a row answers "how is this page
@@ -715,7 +715,7 @@ public enum Reports {
             ReportFilter(id: "empty", name: "Linked with no anchor text", predicate: """
                 EXISTS (SELECT 1 FROM links l WHERE l.to_url_id = u.id
                         AND (l.anchor_text IS NULL OR trim(l.anchor_text) = ''))
-                """, isIssue: true),
+                """, severity: .hygiene),
             // Anchors that describe nothing. Cheap to spot and worth fixing,
             // because they waste the strongest on-page relevance signal a link has.
             ReportFilter(id: "generic", name: "Generic anchor text", predicate: """
@@ -723,11 +723,11 @@ public enum Reports {
                         AND trim(lower(coalesce(l.anchor_text, ''))) IN
                           ('click here','here','read more','more','link','this','learn more',
                            'find out more','continue','details','go','download','click'))
-                """, isIssue: true),
+                """, severity: .hygiene),
             ReportFilter(id: "inconsistent", name: "Five or more different anchors", predicate: """
                 (SELECT count(DISTINCT trim(lower(coalesce(l.anchor_text, ''))))
                  FROM links l WHERE l.to_url_id = u.id) >= 5
-                """, isIssue: true),
+                """, severity: .hygiene),
         ])
 
     /// How a page presents itself when it is shared. Every field here is markup
@@ -741,15 +741,15 @@ public enum Reports {
             allFilter,
             ReportFilter(id: "noOG", name: "No Open Graph tags", predicate: """
                 f.og_title IS NULL AND f.og_description IS NULL AND f.og_image IS NULL
-                """, isIssue: true),
+                """, severity: .hygiene),
             ReportFilter(id: "noOGImage", name: "No og:image",
-                         predicate: missing("og_image"), isIssue: true),
+                         predicate: missing("og_image"), severity: .hygiene),
             // A share card with no title falls back to whatever the network
             // scrapes, which is rarely what anyone intended.
             ReportFilter(id: "noOGTitle", name: "No og:title",
-                         predicate: missing("og_title"), isIssue: true),
+                         predicate: missing("og_title"), severity: .hygiene),
             ReportFilter(id: "noTwitterCard", name: "No twitter:card",
-                         predicate: missing("twitter_card"), isIssue: true),
+                         predicate: missing("twitter_card"), severity: .hygiene),
             ReportFilter(id: "ogTitleDiffers", name: "og:title differs from title", predicate: """
                 f.og_title IS NOT NULL AND f.title IS NOT NULL AND trim(f.og_title) != trim(f.title)
                 """),
@@ -768,7 +768,7 @@ public enum Reports {
             allFilter,
             ReportFilter(id: "none", name: "No structured data", predicate: """
                 NOT EXISTS (SELECT 1 FROM structured_data sd WHERE sd.url_id = u.id)
-                """, isIssue: true),
+                """, severity: .hygiene),
             ReportFilter(id: "jsonLD", name: "JSON-LD", predicate: """
                 EXISTS (SELECT 1 FROM structured_data sd
                         WHERE sd.url_id = u.id AND sd.format = 'json-ld')
@@ -786,7 +786,7 @@ public enum Reports {
             ReportFilter(id: "mixedFormats", name: "More than one format", predicate: """
                 (SELECT count(DISTINCT sd.format) FROM structured_data sd
                  WHERE sd.url_id = u.id) > 1
-                """, isIssue: true),
+                """, severity: .hygiene),
         ])
 
     public static let pagination = Report(
@@ -803,9 +803,9 @@ public enum Reports {
             // and everything only reachable through it, from the index.
             ReportFilter(id: "canonicalised", name: "Canonicalised away", predicate: """
                 f.canonical_id IS NOT NULL AND f.canonical_id != u.id
-                """, isIssue: true),
+                """, severity: .hygiene),
             ReportFilter(id: "noindexed", name: "Paginated and noindexed",
-                         predicate: directive("noindex"), isIssue: true),
+                         predicate: directive("noindex"), severity: .hygiene),
         ])
 
     /// Response headers, stored wholesale so a new check is a filter rather than
@@ -819,17 +819,17 @@ public enum Reports {
         filters: [
             allFilter,
             ReportFilter(id: "noHSTS", name: "No HSTS",
-                         predicate: missingHeader("strict-transport-security"), isIssue: true),
+                         predicate: missingHeader("strict-transport-security"), severity: .hygiene),
             ReportFilter(id: "noCSP", name: "No Content-Security-Policy",
-                         predicate: missingHeader("content-security-policy"), isIssue: true),
+                         predicate: missingHeader("content-security-policy"), severity: .hygiene),
             ReportFilter(id: "noNosniff", name: "No X-Content-Type-Options",
-                         predicate: missingHeader("x-content-type-options"), isIssue: true),
+                         predicate: missingHeader("x-content-type-options"), severity: .hygiene),
             ReportFilter(id: "noFrameOptions", name: "No X-Frame-Options",
-                         predicate: missingHeader("x-frame-options"), isIssue: true),
+                         predicate: missingHeader("x-frame-options"), severity: .hygiene),
             ReportFilter(id: "noReferrerPolicy", name: "No Referrer-Policy",
-                         predicate: missingHeader("referrer-policy"), isIssue: true),
+                         predicate: missingHeader("referrer-policy"), severity: .hygiene),
             ReportFilter(id: "insecure", name: "Served over HTTP",
-                         predicate: "u.url NOT LIKE 'https://%'", isIssue: true),
+                         predicate: "u.url NOT LIKE 'https://%'", severity: .hygiene),
             // Cookie flags, read from the stored headers.
             //
             // A caveat worth knowing: URLSession collapses repeated Set-Cookie
@@ -842,15 +842,15 @@ public enum Reports {
             ReportFilter(id: "cookieNoSecure", name: "Cookie without Secure", predicate: """
                 json_extract(r.headers_json, '$."Set-Cookie"') IS NOT NULL
                 AND lower(json_extract(r.headers_json, '$."Set-Cookie"')) NOT LIKE '%secure%'
-                """, isIssue: true),
+                """, severity: .hygiene),
             ReportFilter(id: "cookieNoHttpOnly", name: "Cookie without HttpOnly", predicate: """
                 json_extract(r.headers_json, '$."Set-Cookie"') IS NOT NULL
                 AND lower(json_extract(r.headers_json, '$."Set-Cookie"')) NOT LIKE '%httponly%'
-                """, isIssue: true),
+                """, severity: .hygiene),
             ReportFilter(id: "cookieNoSameSite", name: "Cookie without SameSite", predicate: """
                 json_extract(r.headers_json, '$."Set-Cookie"') IS NOT NULL
                 AND lower(json_extract(r.headers_json, '$."Set-Cookie"')) NOT LIKE '%samesite%'
-                """, isIssue: true),
+                """, severity: .hygiene),
         ])
 
     /// Whatever the crawl was configured to pull out of each page.
@@ -872,7 +872,7 @@ public enum Reports {
             // template that changed, which is exactly what you want to find.
             ReportFilter(id: "none", name: "Nothing matched", predicate: """
                 NOT EXISTS (SELECT 1 FROM extractions e WHERE e.url_id = u.id)
-                """, isIssue: true),
+                """, severity: .hygiene),
         ])
 
     /// What the sitemap claims against what the crawl found.
@@ -899,18 +899,18 @@ public enum Reports {
                 u.in_sitemap = 1
                 AND NOT EXISTS (SELECT 1 FROM links l WHERE l.to_url_id = u.id)
                 AND u.url != coalesce((SELECT seed_url FROM crawl_meta WHERE id = 1), '')
-                """, isIssue: true),
+                """, severity: .breaksIndexing),
             ReportFilter(id: "notInSitemap", name: "Crawled but not in the sitemap", predicate: """
                 u.in_sitemap = 0 AND r.status = 200
                 AND coalesce(r.content_type, '') LIKE 'text/html%'
-                """, isIssue: true),
+                """, severity: .hygiene),
             // A sitemap is a list of URLs the site wants indexed, so a
             // non-indexable one in it is the site contradicting itself.
             ReportFilter(id: "nonIndexable", name: "In the sitemap but non-indexable",
                          predicate: "u.in_sitemap = 1 AND (\(Indexability.isNonIndexable))",
-                         isIssue: true),
+                         severity: .breaksIndexing),
             ReportFilter(id: "uncrawled", name: "In the sitemap but never reached",
-                         predicate: "u.in_sitemap = 1 AND r.status IS NULL", isIssue: true),
+                         predicate: "u.in_sitemap = 1 AND r.status IS NULL", severity: .breaksIndexing),
         ])
 
     /// Stylesheets and scripts, keyed on the resource URL — the same shape the
@@ -933,11 +933,11 @@ public enum Reports {
                 EXISTS (SELECT 1 FROM resources res WHERE res.src_url_id = u.id AND res.kind = 'js')
                 """),
             ReportFilter(id: "broken", name: "Broken",
-                         predicate: "r.status = 0 OR r.status >= 400", isIssue: true),
+                         predicate: "r.status = 0 OR r.status >= 400", severity: .breaksIndexing),
             ReportFilter(id: "over100kb", name: "Over 100KB",
-                         predicate: "r.content_length > 102400", isIssue: true),
+                         predicate: "r.content_length > 102400", severity: .hygiene),
             ReportFilter(id: "insecure", name: "Loaded over HTTP",
-                         predicate: "u.url NOT LIKE 'https://%'", isIssue: true),
+                         predicate: "u.url NOT LIKE 'https://%'", severity: .hygiene),
         ])
 
     /// What rendering changed, and what it cost.
@@ -956,19 +956,19 @@ public enum Reports {
             ReportFilter(id: "rendered", name: "Rendered", predicate: "r.rendered = 1"),
             ReportFilter(id: "errors", name: "JavaScript errors",
                          predicate: "r.js_errors IS NOT NULL AND trim(r.js_errors) != ''",
-                         isIssue: true),
+                         severity: .hygiene),
             // A page whose content only exists after scripts run is invisible to
             // any crawler that does not render — including, historically, this one.
             ReportFilter(id: "contentNeedsJS", name: "Content only appears after rendering",
                          predicate: """
                 r.rendered = 1 AND r.rendered_words > coalesce(r.static_words, 0) * 2
                 AND r.rendered_words > 50
-                """, isIssue: true),
+                """, severity: .breaksIndexing),
             ReportFilter(id: "emptyWithoutJS", name: "Nothing at all without JavaScript",
                          predicate: "r.rendered = 1 AND coalesce(r.static_words, 0) < 10",
-                         isIssue: true),
+                         severity: .breaksIndexing),
             ReportFilter(id: "slow", name: "Slow to render (over 3s)",
-                         predicate: "r.render_ms > 3000", isIssue: true),
+                         predicate: "r.render_ms > 3000", severity: .hygiene),
             ReportFilter(id: "notRendered", name: "Not rendered",
                          predicate: "r.rendered = 0"),
         ])
@@ -992,13 +992,13 @@ public enum Reports {
             // a rendered measurement on one machine with a warm cache, not a
             // field metric, so treat it as a smell rather than a verdict.
             ReportFilter(id: "slowLCP", name: "LCP over 2.5s",
-                         predicate: "r.perf_lcp_ms > 2500", isIssue: true),
+                         predicate: "r.perf_lcp_ms > 2500", severity: .costsClicks),
             ReportFilter(id: "slowTTFB", name: "TTFB over 800ms",
-                         predicate: "r.perf_ttfb_ms > 800", isIssue: true),
+                         predicate: "r.perf_ttfb_ms > 800", severity: .costsClicks),
             ReportFilter(id: "slowLoad", name: "Load over 3s",
-                         predicate: "r.perf_load_ms > 3000", isIssue: true),
+                         predicate: "r.perf_load_ms > 3000", severity: .costsClicks),
             ReportFilter(id: "manyRequests", name: "Over 50 subresources",
-                         predicate: "r.perf_resources > 50", isIssue: true),
+                         predicate: "r.perf_resources > 50", severity: .hygiene),
             ReportFilter(id: "noMetrics", name: "No timings reported",
                          predicate: "r.perf_ttfb_ms IS NULL AND r.perf_fcp_ms IS NULL"),
         ])
@@ -1016,19 +1016,19 @@ public enum Reports {
         filters: [
             allFilter,
             ReportFilter(id: "robots", name: "Blocked by robots.txt",
-                         predicate: "u.skip_reason = 'blocked by robots.txt'", isIssue: true),
+                         predicate: "u.skip_reason = 'blocked by robots.txt'", severity: .breaksIndexing),
             ReportFilter(id: "filters", name: "Excluded by URL filters",
                          predicate: "u.skip_reason = 'excluded by URL filters'"),
             ReportFilter(id: "depth", name: "Beyond max depth",
                          predicate: "u.skip_reason = 'beyond max depth'"),
             ReportFilter(id: "cap", name: "URL cap reached",
-                         predicate: "u.skip_reason = 'URL cap reached'", isIssue: true),
+                         predicate: "u.skip_reason = 'URL cap reached'", severity: .breaksIndexing),
             ReportFilter(id: "redirects", name: "Redirect chain too long",
-                         predicate: "u.skip_reason = 'redirect chain too long'", isIssue: true),
+                         predicate: "u.skip_reason = 'redirect chain too long'", severity: .breaksIndexing),
             // A URL the sitemap declares that the crawl then refused to fetch is
             // the site contradicting itself twice over.
             ReportFilter(id: "sitemapBlocked", name: "In the sitemap but not crawlable",
-                         predicate: "u.in_sitemap = 1", isIssue: true),
+                         predicate: "u.in_sitemap = 1", severity: .breaksIndexing),
         ])
 
     /// How each page would appear as a search result.
@@ -1046,18 +1046,18 @@ public enum Reports {
             allFilter,
             ReportFilter(id: "titleTruncated", name: "Title would be truncated",
                          predicate: "f.title_pixels > \(Int(SERPMetrics.titleLimit))",
-                         isIssue: true),
+                         severity: .costsClicks),
             ReportFilter(id: "descTruncated", name: "Description would be truncated",
                          predicate: "f.meta_description_pixels > \(Int(SERPMetrics.descriptionLimit))",
-                         isIssue: true),
+                         severity: .costsClicks),
             // Under half the available width is a wasted snippet: there was room
             // to say more and the page did not.
             ReportFilter(id: "titleShort", name: "Title uses under half the width",
                          predicate: "f.title_pixels IS NOT NULL AND f.title_pixels < \(Int(SERPMetrics.titleLimit / 2))",
-                         isIssue: true),
+                         severity: .costsClicks),
             ReportFilter(id: "noSnippet", name: "Nothing to show in a snippet",
                          predicate: "(\(missing("title"))) OR (\(missing("meta_description")))",
-                         isIssue: true),
+                         severity: .costsClicks),
         ])
 
     /// Everything the crawl could not know on its own.
@@ -1097,12 +1097,12 @@ public enum Reports {
                          name: "Getting clicks but non-indexable", predicate: """
                 \(Col.metricValue(.searchConsole, "Clicks")) > 0
                 AND (\(Indexability.isNonIndexable))
-                """, isIssue: true),
+                """, severity: .breaksIndexing),
             ReportFilter(id: "impressionsNoClicks",
                          name: "Impressions but no clicks", predicate: """
                 \(Col.metricValue(.searchConsole, "Impressions")) > 100
                 AND coalesce(\(Col.metricValue(.searchConsole, "Clicks")), 0) = 0
-                """, isIssue: true),
+                """, severity: .costsClicks),
             ReportFilter(id: "strikingDistance",
                          name: "Ranking just off page one", predicate: """
                 \(Col.metricValue(.searchConsole, "Position")) BETWEEN 11 AND 20
@@ -1112,20 +1112,20 @@ public enum Reports {
                 \(Col.hasMetrics(.searchConsole))
                 AND coalesce(\(Col.metricValue(.searchConsole, "Clicks")), 0) = 0
                 AND NOT (\(Indexability.isNonIndexable))
-                """, isIssue: true),
+                """, severity: .costsClicks),
             ReportFilter(id: "sessionsButThin",
                          name: "Has sessions but under 200 words", predicate: """
                 \(Col.metricValue(.analytics, "Sessions")) > 0
                 AND coalesce(f.word_count, 0) < 200
-                """, isIssue: true),
+                """, severity: .costsClicks),
             ReportFilter(id: "cwvFailing", name: "Fails Core Web Vitals", predicate: """
                 (SELECT m.text FROM external_metrics m
                  WHERE m.url_id = u.id AND m.source = 'pagespeed'
                    AND m.metric = 'CWV Assessment') = 'SLOW'
-                """, isIssue: true),
+                """, severity: .costsClicks),
             ReportFilter(id: "slowLighthouse", name: "Lighthouse performance under 50",
                          predicate: "\(Col.metricValue(.pageSpeed, "Lighthouse Performance")) < 50",
-                         isIssue: true),
+                         severity: .costsClicks),
         ])
 
     public static let pageDepth = Report(
@@ -1134,12 +1134,12 @@ public enum Reports {
         columns: [Col.address, Col.depth, Col.inlinks, Col.status, Col.title, Col.indexability],
         filters: [
             allFilter,
-            ReportFilter(id: "deep", name: "Deeper than 3", predicate: "u.depth > 3", isIssue: true),
+            ReportFilter(id: "deep", name: "Deeper than 3", predicate: "u.depth > 3", severity: .hygiene),
             // The closest honest signal to an orphan a crawl-only tool can give:
             // every discovered URL has an inlink by definition, so "only one" is
             // the weakest internal linking a crawl can actually observe.
             ReportFilter(id: "singleInlink", name: "One inlink only", predicate: """
                 (SELECT count(DISTINCT from_url_id) FROM links WHERE to_url_id = u.id) = 1
-                """, isIssue: true),
+                """, severity: .hygiene),
         ])
 }

@@ -57,7 +57,7 @@ private func rows(_ store: Store, _ report: Report, _ filterID: String) throws -
 @Test func everyReportHasAnAllFilterFirst() {
     for report in Reports.all {
         #expect(report.defaultFilter.id == "all", "\(report.id) does not lead with All")
-        #expect(report.defaultFilter.isIssue == false)
+        #expect(report.defaultFilter.severity == nil)
     }
 }
 

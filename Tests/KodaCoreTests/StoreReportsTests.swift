@@ -15,7 +15,7 @@ private let internalPages = Report(
     columns: [addressColumn, statusColumn, titleColumn],
     filters: [
         ReportFilter(id: "all", name: "All", predicate: "1"),
-        ReportFilter(id: "gone", name: "404", predicate: "r.status = 404", isIssue: true),
+        ReportFilter(id: "gone", name: "404", predicate: "r.status = 404", severity: .breaksIndexing),
     ]
 )
 
