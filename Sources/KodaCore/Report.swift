@@ -7,6 +7,16 @@ public enum ColumnAlignment: Sendable {
     case leading, trailing
 }
 
+/// What a column's values mean, when that changes how they should be drawn.
+///
+/// Here rather than inferred from the column id in the table, for the same
+/// reason `ColumnAlignment` is here: how a value should read is part of
+/// defining the column, and an id-string check in the view would silently stop
+/// working the day a report named its column something else.
+public enum ColumnSemantic: Sendable, Equatable {
+    case status, indexability
+}
+
 public struct ReportColumn: Sendable, Identifiable, Equatable {
     /// Stable key, also the SQL alias and the `NSTableColumn` identifier. Must be
     /// unique within its report — two columns sharing an id would shadow each
@@ -19,10 +29,12 @@ public struct ReportColumn: Sendable, Identifiable, Equatable {
     public let width: Double
     public let alignment: ColumnAlignment
     public let sortable: Bool
+    public let semantic: ColumnSemantic?
 
     public init(
         id: String, header: String, expression: String, width: Double,
-        alignment: ColumnAlignment = .leading, sortable: Bool = true
+        alignment: ColumnAlignment = .leading, sortable: Bool = true,
+        semantic: ColumnSemantic? = nil
     ) {
         self.id = id
         self.header = header
@@ -30,6 +42,7 @@ public struct ReportColumn: Sendable, Identifiable, Equatable {
         self.width = width
         self.alignment = alignment
         self.sortable = sortable
+        self.semantic = semantic
     }
 }
 

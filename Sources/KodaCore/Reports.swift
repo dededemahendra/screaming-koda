@@ -58,11 +58,13 @@ public enum Reports {
         static let address = ReportColumn(id: "address", header: "Address",
                                           expression: "u.url", width: 340)
         static let status = ReportColumn(id: "status", header: "Status",
-                                         expression: "r.status", width: 60, alignment: .trailing)
+                                         expression: "r.status", width: 60, alignment: .trailing,
+                                         semantic: .status)
         static let contentType = ReportColumn(id: "contentType", header: "Content Type",
                                               expression: "r.content_type", width: 150)
         static let indexability = ReportColumn(id: "indexability", header: "Indexability",
-                                               expression: Indexability.expression, width: 190)
+                                               expression: Indexability.expression, width: 190,
+                                               semantic: .indexability)
         static let title = ReportColumn(id: "title", header: "Title", expression: "f.title", width: 260)
         static let titleLength = ReportColumn(id: "titleLength", header: "Len",
                                               expression: "f.title_length", width: 50, alignment: .trailing)

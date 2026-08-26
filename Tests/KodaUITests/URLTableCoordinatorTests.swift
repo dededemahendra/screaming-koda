@@ -196,12 +196,12 @@ private func queuedOnlyRows() throws -> RowStore {
 @Test func installColumnsReplacesTheWholeSetAndClearsStaleSortDescriptors() throws {
     let coordinator = URLTableCoordinator(rows: try seededRows(pages: 2), report: internalReport)
     let table = NSTableView()
-    coordinator.installColumns(on: table)
+    coordinator.installColumns(on: table, paneWidth: 1100)
     #expect(table.tableColumns.map(\.identifier.rawValue) == internalReport.columns.map(\.id))
 
     table.sortDescriptors = [NSSortDescriptor(key: "status", ascending: true)]
     coordinator.report = Reports.canonicals
-    coordinator.installColumns(on: table)
+    coordinator.installColumns(on: table, paneWidth: 1100)
     #expect(table.tableColumns.map(\.identifier.rawValue) == Reports.canonicals.columns.map(\.id))
     #expect(table.sortDescriptors.isEmpty, "a sort from the previous tab must not persist")
 }

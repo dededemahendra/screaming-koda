@@ -2,6 +2,23 @@ import AppKit
 import KodaCore
 import SwiftUI
 
+/// `NSTableView` paints its alternating background across the whole clip view,
+/// so a table with nine rows in a tall pane shows nine rows of data followed by
+/// forty empty stripes. That reads as a rendering fault rather than as empty
+/// space, which is the opposite of what it should say.
+final class KodaTableView: NSTableView {
+    override func drawBackground(inClipRect clipRect: NSRect) {
+        backgroundColor.setFill()
+        clipRect.fill()
+        guard usesAlternatingRowBackgroundColors, numberOfRows > 0 else { return }
+        NSColor.alternatingContentBackgroundColors[1].setFill()
+        for row in stride(from: 1, to: numberOfRows, by: 2) {
+            let rect = rect(ofRow: row)
+            if rect.intersects(clipRect) { rect.fill() }
+        }
+    }
+}
+
 /// Bridges `RowStore` to `NSTableView`. Split out from the representable so it
 /// can be unit-tested — SwiftUI view structs cannot be.
 @MainActor
@@ -87,6 +104,21 @@ public final class URLTableCoordinator: NSObject, NSTableViewDataSource, NSTable
         return cell
     }
 
+    /// Colour marks exceptions, so a 200 and an indexable page get none. This
+    /// is the same mapping the sidebar and the inspector use — it lives in
+    /// `Theme` and is reached from here so the three cannot drift apart.
+    static func ink(for value: String, semantic: ColumnSemantic?) -> Theme.Ink? {
+        switch semantic {
+        case .status:
+            return Theme.ink(forStatus: Int(value))
+        case .indexability:
+            // Anything but "Indexable" is a reason the page will not rank.
+            return value.isEmpty || value == "Indexable" ? nil : .critical
+        case nil:
+            return nil
+        }
+    }
+
     /// The single assignment site for a cell's text, reachable from both the
     /// reused and freshly-created paths in `tableView(_:viewFor:row:)`. AppKit's
     /// reuse pool cannot be driven under `swift test` (it's populated only by
@@ -97,18 +129,26 @@ public final class URLTableCoordinator: NSObject, NSTableViewDataSource, NSTable
     /// possible mistake, and makes the population step itself directly testable
     /// by handing it a pre-populated cell.
     func configure(_ cell: NSTableCellView, columnIndex: Int, row: Int) {
-        cell.textField?.stringValue = value(columnIndex: columnIndex, row: row)
+        let text = value(columnIndex: columnIndex, row: row)
+        cell.textField?.stringValue = text
+        let column = report.columns[columnIndex]
+        cell.textField?.textColor =
+            Self.ink(for: text, semantic: column.semantic)?.nsColor ?? .labelColor
+        cell.textField?.font = column.alignment == .trailing
+            ? .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+            : .systemFont(ofSize: NSFont.systemFontSize)
     }
 
     /// Replaces the table's columns with the current report's. Called only when
     /// the report actually changes — doing it on every update would drop the
     /// user's scroll position twice a second during a crawl.
-    func installColumns(on table: NSTableView) {
+    func installColumns(on table: NSTableView, paneWidth: CGFloat) {
         for column in table.tableColumns { table.removeTableColumn(column) }
-        for column in report.columns {
+        let widths = ColumnLayout.widths(for: report, paneWidth: paneWidth)
+        for (index, column) in report.columns.enumerated() {
             let tableColumn = NSTableColumn(identifier: .init(column.id))
             tableColumn.title = column.header
-            tableColumn.width = column.width
+            tableColumn.width = widths[index]
             if column.sortable {
                 tableColumn.sortDescriptorPrototype = NSSortDescriptor(key: column.id, ascending: true)
             }
@@ -138,19 +178,20 @@ public struct URLTableView: NSViewRepresentable {
     }
 
     public func makeNSView(context: Context) -> NSScrollView {
-        let table = NSTableView()
+        let table = KodaTableView()
         table.usesAlternatingRowBackgroundColors = true
         table.rowSizeStyle = .default
         table.allowsMultipleSelection = false
         table.dataSource = context.coordinator
         table.delegate = context.coordinator
-        context.coordinator.installColumns(on: table)
 
         let scrollView = NSScrollView()
         scrollView.documentView = table
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = true
         scrollView.autohidesScrollers = false
+
+        context.coordinator.installColumns(on: table, paneWidth: scrollView.contentSize.width)
         return scrollView
     }
 
@@ -162,10 +203,16 @@ public struct URLTableView: NSViewRepresentable {
         context.coordinator.onSortChange = onSortChange
         context.coordinator.onSelect = onSelect
 
+        let paneWidth = scrollView.contentSize.width
+        if !reportChanged, let first = table.tableColumns.first {
+            let widths = ColumnLayout.widths(for: report, paneWidth: paneWidth)
+            if abs(first.width - widths[0]) > 0.5 { first.width = widths[0] }
+        }
+
         if reportChanged {
             // Row 4 of Titles is not row 4 of Images, so keeping the selected
             // index across a tab change would silently select an unrelated URL.
-            context.coordinator.installColumns(on: table)
+            context.coordinator.installColumns(on: table, paneWidth: paneWidth)
             table.deselectAll(nil)
             table.reloadData()
             table.scroll(.zero)
