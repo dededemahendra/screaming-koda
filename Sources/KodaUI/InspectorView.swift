@@ -43,7 +43,7 @@ public struct InspectorView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .padding(8)
+            .padding(Theme.Space.small)
             Divider()
 
             if detail == nil {
@@ -97,22 +97,32 @@ public struct InspectorView: View {
 
     private var detailsList: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 3) {
+            // A Grid rather than a fixed 190pt label column: at 190 every value
+            // on a wide window started a third of the way across the pane with
+            // nothing in between, and at a narrow one the longer labels wrapped.
+            // The grid sizes the column to the widest label there actually is.
+            Grid(alignment: .leadingFirstTextBaseline,
+                 horizontalSpacing: Theme.Space.medium,
+                 verticalSpacing: Theme.Space.hair) {
                 ForEach(detail?.fields ?? []) { field in
-                    HStack(alignment: .top, spacing: 10) {
+                    GridRow {
                         Text(field.label)
-                            .frame(width: 190, alignment: .trailing)
-                            .foregroundStyle(.secondary)
-                        // An absent value reads as a dash rather than a blank, so
-                        // "no title" is visibly different from a rendering gap.
+                            .font(Theme.Face.label)
+                            .foregroundStyle(Theme.Ink.quiet.color)
+                            .gridColumnAlignment(.trailing)
+                        // An absent value reads as a dash rather than a blank,
+                        // so "no title" is visibly different from a gap.
                         Text(field.value ?? "–")
+                            .font(Theme.Face.body)
                             .textSelection(.enabled)
-                            .foregroundStyle(field.value == nil ? .secondary : .primary)
-                        Spacer(minLength: 0)
+                            .foregroundStyle(field.value == nil
+                                             ? Theme.Ink.quiet.color : Color.primary)
+                            .gridColumnAlignment(.leading)
                     }
                 }
             }
-            .padding(10)
+            .padding(Theme.Space.small)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -120,24 +130,27 @@ public struct InspectorView: View {
         Group {
             if let rows, !rows.items.isEmpty {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: Theme.Space.hair) {
                         truncationNotice(rows.items.count, rows.total)
                         ForEach(rows.items) { link in
-                            HStack(spacing: 10) {
+                            HStack(spacing: Theme.Space.medium) {
                                 Text(link.status.map(String.init) ?? "–")
-                                    .monospacedDigit()
+                                    .font(Theme.Numeral.body)
                                     .frame(width: 40, alignment: .trailing)
-                                    .foregroundStyle(statusColour(link.status))
+                                    .foregroundStyle(Theme.ink(forStatus: link.status)?.color
+                                                     ?? Theme.Ink.quiet.color)
                                 Text(link.url).lineLimit(1).truncationMode(.middle)
-                                Text(link.anchor ?? "").foregroundStyle(.secondary).lineLimit(1)
+                                Text(link.anchor ?? "")
+                                    .foregroundStyle(Theme.Ink.quiet.color).lineLimit(1)
                                 Spacer(minLength: 0)
                                 if let rel = link.rel {
-                                    Text(rel).font(.caption).foregroundStyle(.secondary)
+                                    Text(rel).font(Theme.Face.caption)
+                                        .foregroundStyle(Theme.Ink.quiet.color)
                                 }
                             }
                         }
                     }
-                    .padding(10)
+                    .padding(Theme.Space.small)
                 }
             } else {
                 placeholder(empty)
@@ -149,26 +162,28 @@ public struct InspectorView: View {
         Group {
             if let images, !images.items.isEmpty {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: Theme.Space.hair) {
                         truncationNotice(images.items.count, images.total)
                         ForEach(images.items) { image in
-                            HStack(spacing: 10) {
+                            HStack(spacing: Theme.Space.medium) {
                                 Text(image.status.map(String.init) ?? "–")
-                                    .monospacedDigit()
+                                    .font(Theme.Numeral.body)
                                     .frame(width: 40, alignment: .trailing)
-                                    .foregroundStyle(statusColour(image.status))
+                                    .foregroundStyle(Theme.ink(forStatus: image.status)?.color
+                                                     ?? Theme.Ink.quiet.color)
                                 Text(image.url).lineLimit(1).truncationMode(.middle)
                                 Spacer(minLength: 0)
                                 Text(image.alt ?? "no alt text")
-                                    .foregroundStyle(image.alt == nil ? .orange : .secondary)
+                                    .foregroundStyle(image.alt == nil
+                                                     ? Theme.Ink.warning.color : Theme.Ink.quiet.color)
                                     .lineLimit(1)
                                 Text(image.bytes.map { "\($0 / 1024) KB" } ?? "–")
-                                    .monospacedDigit()
-                                    .foregroundStyle(.secondary)
+                                    .font(Theme.Numeral.body)
+                                    .foregroundStyle(Theme.Ink.quiet.color)
                             }
                         }
                     }
-                    .padding(10)
+                    .padding(Theme.Space.small)
                 }
             } else {
                 placeholder("This page uses no images")
@@ -178,25 +193,26 @@ public struct InspectorView: View {
 
     private var chainList: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: Theme.Space.hair) {
                 ForEach(chain) { hop in
-                    HStack(spacing: 10) {
+                    HStack(spacing: Theme.Space.medium) {
                         Text("\(hop.id + 1)")
-                            .monospacedDigit().frame(width: 22, alignment: .trailing)
-                            .foregroundStyle(.secondary)
+                            .font(Theme.Numeral.body).frame(width: 22, alignment: .trailing)
+                            .foregroundStyle(Theme.Ink.quiet.color)
                         Text(hop.status.map(String.init) ?? "–")
-                            .monospacedDigit().frame(width: 40, alignment: .trailing)
-                            .foregroundStyle(statusColour(hop.status))
+                            .font(Theme.Numeral.body).frame(width: 40, alignment: .trailing)
+                            .foregroundStyle(Theme.ink(forStatus: hop.status)?.color
+                                             ?? Theme.Ink.quiet.color)
                         Text(hop.url).lineLimit(1).truncationMode(.middle)
                         if hop.isLoop {
                             Text("loop closes here")
-                                .font(.caption).foregroundStyle(.red)
+                                .font(Theme.Face.caption).foregroundStyle(Theme.Ink.critical.color)
                         }
                         Spacer(minLength: 0)
                     }
                 }
             }
-            .padding(10)
+            .padding(Theme.Space.small)
         }
     }
 
@@ -206,18 +222,10 @@ public struct InspectorView: View {
     private func truncationNotice(_ shown: Int, _ total: Int) -> some View {
         if shown < total {
             Text("Showing the first \(shown) of \(total).")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 4)
+                .font(Theme.Face.label)
+                .foregroundStyle(Theme.Ink.quiet.color)
+                .padding(.bottom, Theme.Space.tight)
         }
-    }
-
-    private func statusColour(_ status: Int?) -> Color {
-        guard let status else { return .secondary }
-        if status == 0 || status >= 500 { return .red }
-        if status >= 400 { return .orange }
-        if status >= 300 { return .yellow }
-        return .secondary
     }
 
     private func placeholder(_ text: String) -> some View {
@@ -225,7 +233,7 @@ public struct InspectorView: View {
             Spacer()
             HStack {
                 Spacer()
-                Text(text).foregroundStyle(.secondary)
+                Text(text).foregroundStyle(Theme.Ink.quiet.color)
                 Spacer()
             }
             Spacer()
