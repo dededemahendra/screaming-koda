@@ -26,7 +26,13 @@ private struct ThreePageClient: HTTPClient {
 /// `ThreePageClient`'s three pages complete in a single poll tick of
 /// `waitUntil`, too fast to pause mid-crawl deterministically.
 private struct SlowManyPageClient: HTTPClient {
-    var pageCount = 40
+    /// Far more pages than the one test using this needs to crawl, because that
+    /// test pauses partway and then stops rather than finishing. The count is
+    /// runway: at 20ms a page across the default workers, forty pages gave the
+    /// crawl about 160ms of life, which scheduling jitter under parallel test
+    /// execution routinely ate — the crawl finished before `pause()` landed and
+    /// the test failed on `.finished` where it expected `.paused`.
+    var pageCount = 200
 
     func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
         if url.hasSuffix("/robots.txt") {
@@ -170,8 +176,26 @@ private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) async
 
     #expect(c.rate.perSecond == nil, "a paused crawl must not resume measuring a rate")
 
-    await c.resume()
+    // Stopped rather than resumed to completion. This test needs a crawl that is
+    // still going when `pause()` lands, and nothing else; making it also wait for
+    // that same crawl to finish would make it pay for the race twice, and under
+    // parallel execution the finish is what used to win.
+    await c.stop()
+}
+
+/// Split from the pause test above rather than tacked onto its end: depth is
+/// recorded by the same tick that observes the rate, but asserting it needs a
+/// crawl that *finished*, which is the opposite of what a pause needs. Sharing
+/// one crawl between the two made whichever assertion ran second depend on a
+/// race it had no reason to care about.
+@MainActor
+@Test func aFinishedCrawlRecordsTheDepthItReached() async {
+    let c = CrawlController(client: ThreePageClient(), parser: SwiftSoupParser(), dbPath: nil)
+    c.seedURL = "https://three.test/"
+    await c.start()
     #expect(await waitUntil { c.state == .finished })
+
+    c.refreshCounts(force: true)
     #expect(c.depthReached != nil, "the finished crawl's depth is recorded")
 }
 

@@ -56,6 +56,15 @@ private let page = """
     #expect(f.lang == "en-GB")
 }
 
+@Test func extractsBaseHref() throws {
+    let withBase = """
+    <!doctype html>
+    <html><head><base href="https://example.com/shop/"></head><body></body></html>
+    """
+    #expect(try parser.parse(html: withBase).baseHref == "https://example.com/shop/")
+    #expect(try parser.parse(html: page).baseHref == nil, "no <base> in this page")
+}
+
 @Test func extractsLinksWithRelAndPosition() throws {
     let f = try parser.parse(html: page)
     #expect(f.links.count == 2)

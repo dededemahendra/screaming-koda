@@ -238,7 +238,7 @@ public actor CrawlEngine {
         // seed host; applying it to a cross-host URL would silently drop links whenever
         // the seed's own robots.txt happens to disallow a matching path.
         let isOurHost = Store.isInternal(item.url, seedHost: config.seedHost, config: config)
-        if config.respectRobots, isOurHost, !robots.isAllowed(path: item.url.path, userAgent: config.userAgent) {
+        if config.respectRobots, isOurHost, !robots.isAllowed(path: item.url.pathWithQuery, userAgent: config.userAgent) {
             return nil
         }
 
