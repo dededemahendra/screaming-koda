@@ -40,7 +40,7 @@ struct EmptyStatePanel: View {
                 .foregroundStyle(ink.color)
             Text(title).font(Theme.Face.title)
             Text(message)
-                .font(Theme.Face.label)
+                .font(Theme.Numeral.label)
                 .foregroundStyle(Theme.Ink.quiet.color)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
