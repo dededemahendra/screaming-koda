@@ -39,6 +39,7 @@ public struct CrawlToolbar: View {
     @Binding private var showingSettings: Bool
     @Binding private var workspaceView: WorkspaceView
     private let onExport: (ExportScope, ExportFormat) -> Void
+    @FocusState private var seedFocused: Bool
 
     public init(controller: CrawlController, showingSettings: Binding<Bool>,
                 workspaceView: Binding<WorkspaceView>,
@@ -57,6 +58,8 @@ public struct CrawlToolbar: View {
                 .textFieldStyle(.roundedBorder)
                 .frame(minWidth: 280)
                 .onSubmit { if actions.contains(.start) { Task { await controller.start() } } }
+                .focused($seedFocused)
+                .onAppear { seedFocused = controller.state == .idle && !controller.canExport }
 
             if actions.contains(.start) {
                 Button("Start") { Task { await controller.start() } }
