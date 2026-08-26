@@ -39,10 +39,13 @@ enum ViewCapture {
         return rep
     }
 
-    /// Samples every other pixel in both directions. A full scan of a
-    /// 1100x660 window is 726,000 `colorAt` calls per assertion, which is slow
-    /// enough to notice across a dozen view tests; every second pixel cannot
-    /// miss a glyph.
+    /// Samples every other pixel in both directions for performance. A full scan
+    /// of a 1100x660 window is 726,000 `colorAt` calls per assertion, which is slow
+    /// enough to notice across a dozen view tests. The stride samples a quarter of
+    /// the pixels, so content confined to a single pixel line at an unlucky offset
+    /// could be missed. It cannot miss anti-aliased text or an SF Symbol — which is
+    /// what every view asserted through this utility draws — but a view whose only
+    /// drawn content is a hairline would need a full scan.
     static func distinctColours(_ rep: NSBitmapImageRep) -> Int {
         var seen = Set<UInt32>()
         for y in stride(from: 0, to: rep.pixelsHigh, by: 2) {
