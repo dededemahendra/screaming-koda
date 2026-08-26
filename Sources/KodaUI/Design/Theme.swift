@@ -56,9 +56,9 @@ public enum Theme {
     /// right-aligned counts that jitter as they update during a crawl is the
     /// most obvious tell of an unconsidered data view.
     public enum Numeral {
-        public static let body = Font.body.monospacedDigit()
-        public static let label = Font.callout.monospacedDigit()
-        public static let caption = Font.caption.monospacedDigit()
+        public static let body = Face.body.monospacedDigit()
+        public static let label = Face.label.monospacedDigit()
+        public static let caption = Face.caption.monospacedDigit()
     }
 
     /// The one place a status code becomes a colour.

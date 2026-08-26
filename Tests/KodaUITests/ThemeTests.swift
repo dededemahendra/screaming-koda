@@ -36,6 +36,33 @@ import Testing
     }
 }
 
+/// Neither test above would notice an ink that stopped adapting: resolving
+/// to *something*, and differing from its siblings, both hold even for a
+/// colour frozen at its light-mode value. This compares each data ink to
+/// itself across the two appearances, which is the comparison that would
+/// actually catch that regression. `.accent` is excluded: it is the user's
+/// chosen system accent colour, which can legitimately resolve identically
+/// in both appearances depending on which colour they picked.
+@MainActor
+@Test func eachDataInkAdaptsBetweenAppearances() {
+    let inks: [Theme.Ink] = [.critical, .warning, .quiet]
+    var resolvedByAppearance: [NSAppearance.Name: [NSColor]] = [:]
+
+    for name in [NSAppearance.Name.aqua, .darkAqua] {
+        let appearance = NSAppearance(named: name)!
+        appearance.performAsCurrentDrawingAppearance {
+            resolvedByAppearance[name] = inks.map { $0.nsColor.usingColorSpace(.sRGB)! }
+        }
+    }
+
+    let light = resolvedByAppearance[.aqua]!
+    let dark = resolvedByAppearance[.darkAqua]!
+    for index in inks.indices {
+        #expect(light[index] != dark[index],
+                "\(inks[index].rawValue) did not adapt between appearances")
+    }
+}
+
 @Test func theSpacingGridIsWhatTheDesignSays() {
     let grid: [CGFloat] = [Theme.Space.hair, Theme.Space.tight, Theme.Space.small,
                            Theme.Space.medium, Theme.Space.large, Theme.Space.section]
