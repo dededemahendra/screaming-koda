@@ -97,8 +97,28 @@ private func renders(_ view: some View, size: CGSize) -> Bool {
     #expect(renders(LinkGraphView(graph: nil), size: CGSize(width: 800, height: 500)))
 }
 
+/// The nil case draws only a placeholder string, so it exercises none of the
+/// colour and spacing changes made to populated rows and nodes — the
+/// populated case below is the one that matters. The nil case is kept too,
+/// since it is a real state and cheap to assert alongside it.
 @MainActor
-@Test func theTreeAndGraphDrawWithNothingToShow() {
+@Test func theTreeAndGraphDrawWithPopulatedRowsAndNodes() {
+    let child = SiteTreeNode(id: "/blog/one", name: "one", urlID: 2, status: 200,
+                             pageCount: 1, issueCount: 1, children: [])
+    let root = SiteTreeNode(id: "/", name: "/", urlID: nil, status: nil,
+                            pageCount: 1, issueCount: 1, children: [child])
+    ViewCapture.expectNotBlank(SiteTreeView(root: root, onSelect: { _ in })
+                                 .frame(width: 700, height: 400),
+                               size: CGSize(width: 700, height: 400), "the populated site tree")
+
+    let graph = CrawlGraph(
+        nodes: [node(1, depth: 0), node(2, depth: 1, indexable: false), node(3, depth: 2)],
+        edges: [GraphEdge(from: 1, to: 2), GraphEdge(from: 1, to: 3)],
+        totalNodes: 3)
+    ViewCapture.expectNotBlank(LinkGraphView(graph: graph)
+                                 .frame(width: 700, height: 400),
+                               size: CGSize(width: 700, height: 400), "the populated link graph")
+
     ViewCapture.expectNotBlank(SiteTreeView(root: nil, onSelect: { _ in })
                                  .frame(width: 700, height: 400),
                                size: CGSize(width: 700, height: 400), "the empty site tree")

@@ -18,13 +18,24 @@ private let internalReport = Reports.all.first { $0.id == "internal" }!
 }
 
 /// The bug this task exists for: at 1100pt, twelve columns with a fixed 340pt
-/// address ran off the right edge.
+/// address ran off the right edge. `widths.count == columns.count` and
+/// `allSatisfy { $0 > 0 }` cannot fail for any implementation, since `widths`
+/// is `[max(minimumFirstColumn, …)] + rest.map(\.width)` and every declared
+/// width is a positive constant — so the real property is that nothing is
+/// left over and nothing is invented: whenever the pane is wide enough for
+/// the fixed columns plus the minimum address width, the widths sum exactly
+/// to the pane width.
 @Test func noColumnFallsOffTheRightEdgeAtTheMinimumWindowWidth() {
+    let minimumFirstColumn = 220.0
     for pane in stride(from: 640.0, through: 2400.0, by: 40.0) {
         for report in Reports.all {
+            let fixed = report.columns.dropFirst().reduce(0) { $0 + $1.width }
             let widths = ColumnLayout.widths(for: report, paneWidth: pane)
             #expect(widths.count == report.columns.count)
-            #expect(widths.allSatisfy { $0 > 0 })
+            if pane >= fixed + minimumFirstColumn {
+                #expect(widths.reduce(0, +) == pane,
+                        "\(report.id) at pane width \(pane) left space unfilled or overflowed")
+            }
         }
     }
 }
@@ -57,7 +68,7 @@ private let internalReport = Reports.all.first { $0.id == "internal" }!
     #expect(URLTableCoordinator.ink(for: "301", semantic: .status) == Theme.Ink.warning)
     #expect(URLTableCoordinator.ink(for: "200", semantic: .status) == nil)
     #expect(URLTableCoordinator.ink(for: "", semantic: .status) == nil)
-    #expect(URLTableCoordinator.ink(for: "Indexable", semantic: .indexability) == nil)
+    #expect(URLTableCoordinator.ink(for: Indexability.indexable, semantic: .indexability) == nil)
     #expect(URLTableCoordinator.ink(for: "Noindex", semantic: .indexability)
             == Theme.Ink.critical)
     #expect(URLTableCoordinator.ink(for: "Home", semantic: nil) == nil)

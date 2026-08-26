@@ -31,7 +31,7 @@ public struct SiteTreeView: View {
     private func row(_ node: SiteTreeNode) -> some View {
         HStack(spacing: Theme.Space.small) {
             Image(systemName: node.isFolder ? "folder" : "doc.text")
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.Ink.quiet.color)
                 .imageScale(.small)
             Text(node.name).lineLimit(1)
             if node.urlID == nil, node.isFolder {
@@ -39,20 +39,20 @@ public struct SiteTreeView: View {
             }
             Spacer(minLength: Theme.Space.small)
             if node.issueCount > 0 {
-                Text("\(node.issueCount)")
+                Text(node.issueCount.formatted())
                     .font(Theme.Numeral.caption)
-                    .foregroundStyle(Theme.Ink.warning.color)
+                    .foregroundStyle(Theme.Ink.critical.color)
                     .help("Non-indexable pages here or below")
             }
-            Text("\(node.pageCount)")
-                .font(Theme.Numeral.caption).foregroundStyle(.secondary)
+            Text(node.pageCount.formatted())
+                .font(Theme.Numeral.caption).foregroundStyle(Theme.Ink.quiet.color)
         }
         .contentShape(Rectangle())
         .onTapGesture { if let id = node.urlID { onSelect(id) } }
     }
 
     private func placeholder(_ text: String) -> some View {
-        VStack { Spacer(); Text(text).foregroundStyle(.secondary); Spacer() }
+        VStack { Spacer(); Text(text).foregroundStyle(Theme.Ink.quiet.color); Spacer() }
     }
 }
 
@@ -91,7 +91,7 @@ public struct LinkGraphView: View {
             } else {
                 VStack { Spacer()
                     Text("Crawl a site to see how it links together")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Theme.Ink.quiet.color)
                     Spacer() }
             }
         }
@@ -99,13 +99,13 @@ public struct LinkGraphView: View {
 
     private func caption(_ graph: CrawlGraph) -> some View {
         HStack(spacing: Theme.Space.large) {
-            Label("\(graph.nodes.count) pages", systemImage: "circle.grid.2x2")
-            Label("\(graph.edges.count) links", systemImage: "arrow.triangle.branch")
+            Label("\(graph.nodes.count.formatted()) pages", systemImage: "circle.grid.2x2")
+            Label("\(graph.edges.count.formatted()) links", systemImage: "arrow.triangle.branch")
             Label("depth 0–\(graph.maxDepth)", systemImage: "arrow.down.right")
             if graph.isTruncated {
                 // Stated rather than hidden: a capped diagram that looks complete
                 // is worse than no diagram.
-                Text("showing the \(graph.nodes.count) most-linked of \(graph.totalNodes)")
+                Text("showing the \(graph.nodes.count.formatted()) most-linked of \(graph.totalNodes.formatted())")
                     .foregroundStyle(Theme.Ink.warning.color)
             }
             Spacer()
@@ -147,7 +147,7 @@ public struct LinkGraphView: View {
                           control1: CGPoint(x: midX, y: from.y),
                           control2: CGPoint(x: midX, y: to.y))
         }
-        context.stroke(path, with: .color(.secondary.opacity(0.25)), lineWidth: 0.75)
+        context.stroke(path, with: .color(Theme.Ink.quiet.color.opacity(0.25)), lineWidth: 0.75)
 
         for node in graph.nodes {
             guard let point = points[node.id] else { continue }

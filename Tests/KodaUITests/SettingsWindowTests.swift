@@ -44,14 +44,20 @@ import Testing
     }
 }
 
-/// The one property this whole task turns on: `configToApply` is the exact
-/// gate `SettingsWindow`'s `.onChange` calls before every write to
-/// `controller.config`. A pattern that will not compile is indistinguishable
-/// from one that matched nothing, so an invalid include pattern reaching the
+/// Tests `configToApply` itself in isolation: it refuses a candidate
+/// carrying a pattern that will not compile, and passes a valid one through
+/// (clamped). A pattern that will not compile is indistinguishable from one
+/// that matched nothing, so an invalid include pattern reaching the
 /// controller would silently crawl the seed and stop, looking like a broken
-/// tool. Testing `problems(in:)` alone (as this test used to) would miss a
-/// regression where some future binding wrote to `controller.config` without
-/// going through this gate at all.
+/// tool.
+///
+/// This does not test the write-through wiring in `SettingsWindow` — it
+/// never touches the view, so it cannot catch a regression where some future
+/// field binds directly to `controller.config` and bypasses `edited`/
+/// `configToApply` entirely, the way `workers`, `timeout`, `urlCap`,
+/// `maxDepth`, every `Toggle` and both credential fields already do by
+/// design. Only include, exclude, sitemap URLs, extra headers and the two
+/// extraction-rule lists are reachable exclusively through this gate.
 @Test func aCandidateWithAPatternThatWillNotCompileIsNeverAppliedThroughTheGate() {
     var invalidInclude = CrawlConfig(seedURL: "https://example.com/")
     invalidInclude.include = ["([unclosed"]

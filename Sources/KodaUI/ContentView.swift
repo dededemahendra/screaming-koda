@@ -43,7 +43,7 @@ public struct ContentView: View {
             VStack(alignment: .leading, spacing: 14) {
                 Text("A crawl of \(existing.host) already exists")
                     .font(.headline)
-                Text("\(existing.urlCount) URLs, last updated \(existing.modifiedAt.formatted(date: .abbreviated, time: .shortened)).")
+                Text("\(existing.urlCount.formatted()) URLs, last updated \(existing.modifiedAt.formatted(date: .abbreviated, time: .shortened)).")
                     .foregroundStyle(.secondary)
                 Text("Resuming continues where it stopped. A finished crawl simply opens for browsing. Replacing deletes it permanently.")
                     .font(.callout)

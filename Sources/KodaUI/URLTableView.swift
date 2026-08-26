@@ -12,7 +12,15 @@ final class KodaTableView: NSTableView {
         clipRect.fill()
         guard usesAlternatingRowBackgroundColors, numberOfRows > 0 else { return }
         NSColor.alternatingContentBackgroundColors[1].setFill()
-        for row in stride(from: 1, to: numberOfRows, by: 2) {
+        // Only the rows this pass could actually paint, not every odd row in
+        // the whole table: at the 500,000 URL cap, striding the full table on
+        // every draw is 250,000 `rect(ofRow:)` calls per frame, and this
+        // table reloads at 2 Hz during a live crawl.
+        let visible = rows(in: clipRect)
+        guard visible.length > 0 else { return }
+        let firstOddRow = visible.location % 2 == 0 ? visible.location + 1 : visible.location
+        let lastRow = min(visible.location + visible.length, numberOfRows)
+        for row in stride(from: firstOddRow, to: lastRow, by: 2) {
             let rect = rect(ofRow: row)
             if rect.intersects(clipRect) { rect.fill() }
         }
@@ -112,8 +120,8 @@ public final class URLTableCoordinator: NSObject, NSTableViewDataSource, NSTable
         case .status:
             return Theme.ink(forStatus: Int(value))
         case .indexability:
-            // Anything but "Indexable" is a reason the page will not rank.
-            return value.isEmpty || value == "Indexable" ? nil : .critical
+            // Anything but Indexability.indexable is a reason the page will not rank.
+            return value.isEmpty || value == Indexability.indexable ? nil : .critical
         case nil:
             return nil
         }

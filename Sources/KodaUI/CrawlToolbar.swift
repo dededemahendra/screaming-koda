@@ -75,7 +75,7 @@ public struct CrawlToolbar: View {
             }
 
             Spacer()
-            statusText.foregroundStyle(.secondary).font(Theme.Numeral.label)
+            statusText.foregroundStyle(Theme.Ink.quiet.color).font(Theme.Numeral.label)
 
             SettingsLink {
                 Image(systemName: "slider.horizontal.3")
@@ -124,7 +124,7 @@ public struct CrawlToolbar: View {
             if controller.state == .running, let rate = controller.rate.summary {
                 parts.append(rate)
             }
-            if let depth = controller.depthReached { parts.append("depth \(depth)") }
+            if let depth = controller.depthReached { parts.append("depth \(depth.formatted())") }
             return Text("\(label) — \(parts.joined(separator: ", "))")
         case .finished:
             return Text("Finished — \(shownCount) in \(controller.selectedReport.name)")
@@ -139,6 +139,6 @@ public struct CrawlToolbar: View {
     /// how many URLs the crawl found.
     private var shownCount: String {
         let n = controller.rows?.count ?? 0
-        return "\(n) row\(n == 1 ? "" : "s")"
+        return "\(n.formatted()) row\(n == 1 ? "" : "s")"
     }
 }

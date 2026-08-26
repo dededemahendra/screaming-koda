@@ -103,7 +103,7 @@ extension SettingsWindow {
         Section("URL filters") {
             Text("One regular expression per line. Include, when non-empty, "
                  + "restricts the crawl to matching URLs; Exclude always wins.")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(Theme.Face.label).foregroundStyle(Theme.Ink.quiet.color)
                 .fixedSize(horizontal: false, vertical: true)
             LabeledContent("Include") {
                 TextEditor(text: $includeText).font(.body.monospaced()).frame(height: 56)
@@ -121,7 +121,7 @@ extension SettingsWindow {
             Text("Far slower: a browser process and hundreds of milliseconds per page "
                  + "instead of one request. Worth it for a site that builds its content "
                  + "client-side, where a static crawl finds empty titles and no links.")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(Theme.Face.label).foregroundStyle(Theme.Ink.quiet.color)
                 .fixedSize(horizontal: false, vertical: true)
             if controller.config.renderJavaScript {
                 Stepper("Pages at once: \(controller.config.renderConcurrency)",
@@ -136,7 +136,7 @@ extension SettingsWindow {
                 }
                 Text("One per line, as Name = expression. Reaches values that never "
                      + "appear in the DOM, such as window variables.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(Theme.Face.caption).foregroundStyle(Theme.Ink.quiet.color)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -147,7 +147,7 @@ extension SettingsWindow {
         Section("Authentication") {
             Text("Stored in the crawl's config, in plain text, next to an "
                  + "unencrypted database. For sites you control.")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(Theme.Face.label).foregroundStyle(Theme.Ink.quiet.color)
                 .fixedSize(horizontal: false, vertical: true)
             TextField("Username", text: $controller.config.basicAuthUser)
             SecureField("Password", text: $controller.config.basicAuthPassword)
@@ -155,7 +155,7 @@ extension SettingsWindow {
                 TextEditor(text: $headerText).font(.body.monospaced()).frame(height: 44)
             }
             Text("One per line, as Name: Value.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(Theme.Face.caption).foregroundStyle(Theme.Ink.quiet.color)
 
             Toggle("Log in through a form", isOn: Binding(
                 get: { controller.config.login != nil },
@@ -176,7 +176,7 @@ extension SettingsWindow {
                     set: { controller.config.login?.password = $0 }))
                 Text("Needs rendering switched on: a form login is a page, and driving "
                      + "it needs a browser.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(Theme.Face.caption).foregroundStyle(Theme.Ink.quiet.color)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -187,7 +187,7 @@ extension SettingsWindow {
         Section("Extraction") {
             Text("One per line, as Name = selector. Prefix an expression with "
                  + "xpath: to use XPath instead of a CSS selector.")
-                .font(.callout).foregroundStyle(.secondary)
+                .font(Theme.Face.label).foregroundStyle(Theme.Ink.quiet.color)
                 .fixedSize(horizontal: false, vertical: true)
             LabeledContent("Rules") {
                 TextEditor(text: $extractionText)

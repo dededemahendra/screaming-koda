@@ -225,9 +225,17 @@ public enum CustomReports {
             columns: columns,
             filters: [
                 ReportFilter(id: "all", name: "All", predicate: "1"),
+                // A user-defined report is a question, not a finding — the same
+                // way the built-in "All" filter is navigation. Giving it a
+                // severity would count every matching row into
+                // `SidebarModel.findingTotal`, which would make the `.clean`
+                // window state permanently unreachable once any custom report
+                // matched anything, and would put "show me all PDFs" on the
+                // export's overview sheet as though it were something wrong
+                // with the site.
                 ReportFilter(id: "matching", name: custom.name.isEmpty ? "Matching" : custom.name,
                              predicate: clauses.joined(separator: " AND "),
-                             arguments: arguments, severity: .hygiene),
+                             arguments: arguments, severity: nil),
             ])
     }
 

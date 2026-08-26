@@ -69,8 +69,10 @@ public final class CrawlController {
     /// Row counts keyed "reportID.filterID", for the sidebar.
     public private(set) var counts: [String: Int] = [:]
     public private(set) var rate = CrawlRate()
-    /// The deepest level reached so far. Free: `refreshCounts` already reads
-    /// the summary.
+    /// The deepest level reached so far. Refreshed alongside the sidebar
+    /// counts by `refreshCounts`, which reads `store.summary()` for this —
+    /// that read was added for this purpose, not an existing one this
+    /// piggybacks on.
     public private(set) var depthReached: Int?
     /// The row the inspector is describing, or nil when nothing is selected.
     public private(set) var selectedRowID: Int64?
@@ -440,7 +442,15 @@ public final class CrawlController {
         if let summary = try? store.summary() {
             depthReached = summary.maxDepth
         }
-        rate.observe(crawled: progress?.crawled ?? 0, at: now)
+        // Only while actually running: `state.isActive` (the ticking guard)
+        // is also true during `.paused`, and `pause()` resets `rate`, so
+        // observing here on a paused tick would set a fresh baseline and then
+        // compute a zero delta against an unchanged count — `perSecond`
+        // settling at 0.0 and `summary` reading "0.0/s" for the rest of the
+        // pause, even though `rate` is documented as nil when not measuring.
+        if state == .running {
+            rate.observe(crawled: progress?.crawled ?? 0, at: now)
+        }
     }
 
     /// A crawl that fetched nothing because robots.txt disallowed it looks

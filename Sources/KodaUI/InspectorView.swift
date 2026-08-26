@@ -76,7 +76,7 @@ public struct InspectorView: View {
 
     private func count(_ total: Int?, _ title: String) -> String {
         guard let total else { return title }
-        return "\(title) (\(total))"
+        return "\(title) (\(total.formatted()))"
     }
 
     @ViewBuilder
@@ -177,7 +177,7 @@ public struct InspectorView: View {
                                     .foregroundStyle(image.alt == nil
                                                      ? Theme.Ink.warning.color : Theme.Ink.quiet.color)
                                     .lineLimit(1)
-                                Text(image.bytes.map { "\($0 / 1024) KB" } ?? "–")
+                                Text(image.bytes.map { "\(($0 / 1024).formatted()) KB" } ?? "–")
                                     .font(Theme.Numeral.body)
                                     .foregroundStyle(Theme.Ink.quiet.color)
                             }
@@ -221,7 +221,7 @@ public struct InspectorView: View {
     @ViewBuilder
     private func truncationNotice(_ shown: Int, _ total: Int) -> some View {
         if shown < total {
-            Text("Showing the first \(shown) of \(total).")
+            Text("Showing the first \(shown.formatted()) of \(total.formatted()).")
                 .font(Theme.Numeral.label)
                 .foregroundStyle(Theme.Ink.quiet.color)
                 .padding(.bottom, Theme.Space.tight)

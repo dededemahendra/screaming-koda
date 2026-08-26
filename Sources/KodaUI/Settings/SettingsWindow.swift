@@ -10,9 +10,17 @@ import SwiftUI
 /// include pattern reaching the controller would silently crawl the seed and
 /// stop, looking like a broken tool. Text fields stay as local text while
 /// being edited, so a half-typed pattern is never repeatedly parsed and
-/// rejected mid-keystroke, and every write to `controller.config` passes
-/// through `CrawlSettings.configToApply(_:)`, the single choke point that
-/// refuses a candidate carrying an invalid pattern.
+/// rejected mid-keystroke.
+///
+/// The safety property is narrower than "every write to `controller.config`":
+/// only the six text-buffer fields — include, exclude, sitemap URLs, extra
+/// headers and the two extraction-rule lists — are reachable exclusively
+/// through `edited` and `CrawlSettings.configToApply(_:)`, which is what
+/// keeps an invalid regular expression from ever reaching the controller.
+/// `workers`, `timeout`, `urlCap`, `maxDepth`, every `Toggle` and both
+/// credential fields bind directly to `$controller.config.*` and write
+/// through immediately; those cannot fail to compile, so the gate only needs
+/// to clamp them back into range after the write, not refuse them before it.
 public struct SettingsWindow: View {
     @Bindable var controller: CrawlController
     @State private var pane: SettingsPane
@@ -74,6 +82,13 @@ public struct SettingsWindow: View {
             let value = String(line[line.index(after: split)...]).trimmingCharacters(in: .whitespaces)
             return name.isEmpty ? nil : (name, value)
         })
+        // Not redundant with `configToApply`'s own clamp: this is the
+        // termination guard for the `.onChange(of: edited)` →
+        // `controller.config = applied` → `edited` recompute cycle. Without
+        // it, a directly-bound field (e.g. `workers`) written out of range
+        // would make `edited` keep producing a different clamped value each
+        // time `controller.config` is corrected, and the cycle would never
+        // settle.
         return CrawlSettings.clamped(out)
     }
 
