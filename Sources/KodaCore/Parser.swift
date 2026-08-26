@@ -123,6 +123,9 @@ public struct SwiftSoupParser: PageParser {
         facts.h2Count = h2s.array().count
         facts.h2 = try h2s.first()?.text().trimmed()
 
+        // Only the first counts, as in every browser: a second <base> is ignored.
+        facts.baseHref = try doc.select("base[href]").first()?.attr("href").trimmed()
+
         let canonicals = try doc.select("link[rel=canonical]")
         facts.canonicalCount = canonicals.array().count
         facts.canonical = try canonicals.first()?.attr("href").trimmed()
