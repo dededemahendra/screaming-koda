@@ -29,23 +29,23 @@ public struct SiteTreeView: View {
     }
 
     private func row(_ node: SiteTreeNode) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Theme.Space.small) {
             Image(systemName: node.isFolder ? "folder" : "doc.text")
                 .foregroundStyle(.secondary)
                 .imageScale(.small)
             Text(node.name).lineLimit(1)
             if node.urlID == nil, node.isFolder {
-                Text("folder only").font(.caption).foregroundStyle(.tertiary)
+                Text("folder only").font(Theme.Face.caption).foregroundStyle(.tertiary)
             }
-            Spacer(minLength: 8)
+            Spacer(minLength: Theme.Space.small)
             if node.issueCount > 0 {
                 Text("\(node.issueCount)")
-                    .font(.caption).monospacedDigit()
-                    .foregroundStyle(.orange)
+                    .font(Theme.Numeral.caption)
+                    .foregroundStyle(Theme.Ink.warning.color)
                     .help("Non-indexable pages here or below")
             }
             Text("\(node.pageCount)")
-                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                .font(Theme.Numeral.caption).foregroundStyle(.secondary)
         }
         .contentShape(Rectangle())
         .onTapGesture { if let id = node.urlID { onSelect(id) } }
@@ -98,7 +98,7 @@ public struct LinkGraphView: View {
     }
 
     private func caption(_ graph: CrawlGraph) -> some View {
-        HStack(spacing: 14) {
+        HStack(spacing: Theme.Space.large) {
             Label("\(graph.nodes.count) pages", systemImage: "circle.grid.2x2")
             Label("\(graph.edges.count) links", systemImage: "arrow.triangle.branch")
             Label("depth 0–\(graph.maxDepth)", systemImage: "arrow.down.right")
@@ -106,12 +106,12 @@ public struct LinkGraphView: View {
                 // Stated rather than hidden: a capped diagram that looks complete
                 // is worse than no diagram.
                 Text("showing the \(graph.nodes.count) most-linked of \(graph.totalNodes)")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Theme.Ink.warning.color)
             }
             Spacer()
         }
-        .font(.caption)
-        .padding(8)
+        .font(Theme.Numeral.caption)
+        .padding(Theme.Space.small)
     }
 
     /// Positions every node once, so edges and nodes agree.
@@ -157,7 +157,7 @@ public struct LinkGraphView: View {
             let rect = CGRect(x: point.x - radius, y: point.y - radius,
                               width: radius * 2, height: radius * 2)
             context.fill(Path(ellipseIn: rect),
-                         with: .color(node.indexable ? .accentColor : .orange))
+                         with: .color(node.indexable ? Theme.Ink.accent.color : Theme.Ink.critical.color))
         }
     }
 }

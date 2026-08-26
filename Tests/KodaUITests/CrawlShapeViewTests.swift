@@ -96,3 +96,13 @@ private func renders(_ view: some View, size: CGSize) -> Bool {
     #expect(renders(LinkGraphView(graph: graph), size: CGSize(width: 800, height: 500)))
     #expect(renders(LinkGraphView(graph: nil), size: CGSize(width: 800, height: 500)))
 }
+
+@MainActor
+@Test func theTreeAndGraphDrawWithNothingToShow() {
+    ViewCapture.expectNotBlank(SiteTreeView(root: nil, onSelect: { _ in })
+                                 .frame(width: 700, height: 400),
+                               size: CGSize(width: 700, height: 400), "the empty site tree")
+    ViewCapture.expectNotBlank(LinkGraphView(graph: nil)
+                                 .frame(width: 700, height: 400),
+                               size: CGSize(width: 700, height: 400), "the empty link graph")
+}
