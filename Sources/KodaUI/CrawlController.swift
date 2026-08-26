@@ -68,6 +68,10 @@ public final class CrawlController {
     public private(set) var selectedFilterID: String = Reports.internalURLs.defaultFilter.id
     /// Row counts keyed "reportID.filterID", for the sidebar.
     public private(set) var counts: [String: Int] = [:]
+    public private(set) var rate = CrawlRate()
+    /// The deepest level reached so far. Free: `refreshCounts` already reads
+    /// the summary.
+    public private(set) var depthReached: Int?
     /// The row the inspector is describing, or nil when nothing is selected.
     public private(set) var selectedRowID: Int64?
     /// The inspector's four panes, loaded together when the selection changes.
@@ -287,6 +291,7 @@ public final class CrawlController {
                            sortColumnID: nil, ascending: true)
         rowIndex = freshIndex
         rows = RowStore(store: prepared.store, index: freshIndex)
+        rate.reset()
         refreshCounts(force: true)
         state = .running
 
@@ -332,12 +337,14 @@ public final class CrawlController {
         guard state == .running, let engine else { return }
         await engine.pause()
         state = await engine.state
+        rate.reset()
     }
 
     public func resume() async {
         guard state == .paused, let engine else { return }
         await engine.resume()
         state = await engine.state
+        rate.reset()
     }
 
     public func stop() async {
@@ -430,6 +437,10 @@ public final class CrawlController {
         if let fresh = try? store.counts(for: availableReports) { counts = fresh }
         if let tree = try? store.siteTree() { siteTree = tree }
         if let graph = try? store.linkGraph() { linkGraph = graph }
+        if let summary = try? store.summary() {
+            depthReached = summary.maxDepth
+        }
+        rate.observe(crawled: progress?.crawled ?? 0, at: now)
     }
 
     /// A crawl that fetched nothing because robots.txt disallowed it looks

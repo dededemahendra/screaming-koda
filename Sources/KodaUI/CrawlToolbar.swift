@@ -114,9 +114,18 @@ public struct CrawlToolbar: View {
         case .idle:
             return Text("Ready")
         case .running, .paused:
-            let p = controller.progress
+            let progress = controller.progress
             let label = controller.state == .paused ? "Paused" : "Crawling"
-            return Text("\(label) — \(p?.crawled ?? 0) crawled, \(p?.queued ?? 0) queued")
+            var parts = ["\((progress?.crawled ?? 0).formatted()) crawled",
+                         "\((progress?.queued ?? 0).formatted()) queued"]
+            // Both are absent for the first couple of ticks rather than shown
+            // as zero: a rate of nothing and a rate not yet measured are
+            // different claims.
+            if controller.state == .running, let rate = controller.rate.summary {
+                parts.append(rate)
+            }
+            if let depth = controller.depthReached { parts.append("depth \(depth)") }
+            return Text("\(label) — \(parts.joined(separator: ", "))")
         case .finished:
             return Text("Finished — \(shownCount) in \(controller.selectedReport.name)")
         case .cancelled:
