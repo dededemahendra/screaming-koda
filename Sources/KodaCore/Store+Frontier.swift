@@ -187,4 +187,24 @@ extension Store {
             try Int.fetchOne(db, sql: "SELECT count(*) FROM urls WHERE in_sitemap = 1") ?? 0
         }
     }
+
+    /// The host the seed redirected to, when that is not the host being crawled.
+    ///
+    /// A crawl of example.com.au whose seed redirects to example.com fetches the
+    /// redirect and nothing else: every URL on the destination is a different site
+    /// as far as this crawl is concerned. Nothing in the reports says so, and the
+    /// sitemap's entries then look like hundreds of indexing failures.
+    public func seedRedirectHost(seedHost: String?) throws -> String? {
+        try dbQueue.read { db in
+            guard let host = try String.fetchOne(db, sql: """
+                SELECT destination.host
+                FROM crawl_meta cm
+                JOIN urls seed ON seed.url = cm.seed_url
+                JOIN responses r ON r.url_id = seed.id
+                JOIN urls destination ON destination.id = r.redirect_target_id
+                WHERE cm.id = 1
+                """) else { return nil }
+            return host == seedHost ? nil : host
+        }
+    }
 }

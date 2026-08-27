@@ -135,3 +135,52 @@ private func u(_ s: String) -> NormalizedURL {
     #expect(offHostReason == "external", "a sitemap entry on another host was never this crawl's to fetch")
     #expect(internalReason == nil, "the internal, unfiltered URL was queued, so it has nothing to explain")
 }
+
+// MARK: - seedRedirectHost
+
+private func seededStoreForRedirect(seedURL: String) throws -> (Store, CrawlConfig, Int64, NormalizedURL) {
+    let store = try makeStore()
+    let config = CrawlConfig(seedURL: seedURL)
+    try store.initializeCrawl(config: config, startedAt: Date())
+    let seed = u(seedURL)
+    let id = try store.insertURLIfNew(seed, depth: 0, isInternal: true, discoveredAt: Date())
+    return (store, config, id, seed)
+}
+
+@Test func seedRedirectHostFindsWhereAnOffHostSeedWentTo() throws {
+    let (store, config, id, seed) = try seededStoreForRedirect(seedURL: "https://old.test/")
+    let destination = u("https://new.test/")
+    let result = CrawlResult(urlID: id, url: seed, depth: 0, status: 301, errorKind: nil,
+                             contentType: nil, contentLength: nil, responseTimeMs: 1,
+                             redirectTarget: destination, bodyGz: nil, xRobotsTag: nil, facts: nil)
+    _ = try store.write(results: [result], config: config, now: Date())
+
+    #expect(try store.seedRedirectHost(seedHost: "old.test") == "new.test")
+}
+
+@Test func seedRedirectHostIsNilForASameHostRedirect() throws {
+    let (store, config, id, seed) = try seededStoreForRedirect(seedURL: "https://old.test/a")
+    let destination = u("https://old.test/b")
+    let result = CrawlResult(urlID: id, url: seed, depth: 0, status: 301, errorKind: nil,
+                             contentType: nil, contentLength: nil, responseTimeMs: 1,
+                             redirectTarget: destination, bodyGz: nil, xRobotsTag: nil, facts: nil)
+    _ = try store.write(results: [result], config: config, now: Date())
+
+    #expect(try store.seedRedirectHost(seedHost: "old.test") == nil)
+}
+
+@Test func seedRedirectHostIsNilWhenTheSeedDoesNotRedirect() throws {
+    let (store, config, id, seed) = try seededStoreForRedirect(seedURL: "https://old.test/")
+    let result = CrawlResult(urlID: id, url: seed, depth: 0, status: 200, errorKind: nil,
+                             contentType: "text/html", contentLength: 10, responseTimeMs: 1,
+                             redirectTarget: nil, bodyGz: nil, xRobotsTag: nil, facts: nil)
+    _ = try store.write(results: [result], config: config, now: Date())
+
+    #expect(try store.seedRedirectHost(seedHost: "old.test") == nil)
+}
+
+@Test func seedRedirectHostIsNilWithNoSeedRowAtAll() throws {
+    let store = try makeStore()
+    try store.initializeCrawl(config: CrawlConfig(seedURL: "https://old.test/"), startedAt: Date())
+    #expect(try store.seedRedirectHost(seedHost: "old.test") == nil)
+}
