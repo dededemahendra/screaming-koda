@@ -1028,9 +1028,12 @@ public enum Reports {
             ReportFilter(id: "redirects", name: "Redirect chain too long",
                          predicate: "u.skip_reason = 'redirect chain too long'", severity: .breaksIndexing),
             // A URL the sitemap declares that the crawl then refused to fetch is
-            // the site contradicting itself twice over.
+            // the site contradicting itself twice over — but only when the URL
+            // was ever this crawl's to fetch. A sitemap entry on another host
+            // (e.g. the seed redirected there) was never reachable from here, so
+            // it is not this site's indexing failure.
             ReportFilter(id: "sitemapBlocked", name: "In the sitemap but not crawlable",
-                         predicate: "u.in_sitemap = 1", severity: .breaksIndexing),
+                         predicate: "u.in_sitemap = 1 AND u.is_internal = 1", severity: .breaksIndexing),
         ])
 
     /// How each page would appear as a search result.

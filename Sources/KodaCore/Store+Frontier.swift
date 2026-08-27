@@ -153,7 +153,8 @@ extension Store {
             for url in urls {
                 let isInternal = Self.isInternal(url, seedHost: seedHost, config: config)
                 // A sitemap listing another site's URLs is a mistake worth
-                // recording, but not worth crawling.
+                // recording — not just that the URL was skipped, but why — even
+                // though the URL itself is not worth crawling.
                 let existing = try Int64.fetchOne(
                     db, sql: "SELECT id FROM urls WHERE url_hash = ?", arguments: [url.sha256])
                 if let existing {
@@ -162,15 +163,18 @@ extension Store {
                     continue
                 }
                 let shouldQueue = isInternal && Self.passesFilters(url, config: config)
+                // Same wording as discover()'s skip reasons — the Crawlability
+                // report shows both side by side and they must read as one system.
+                let skipReason: String? = shouldQueue ? nil : (isInternal ? "excluded by URL filters" : "external")
                 try db.execute(
                     sql: """
                         INSERT INTO urls (url, url_hash, host, path, depth, is_internal,
-                                          discovered_at, state, in_sitemap)
-                        VALUES (?,?,?,?,0,?,?,?,1)
+                                          discovered_at, state, in_sitemap, skip_reason)
+                        VALUES (?,?,?,?,0,?,?,?,1,?)
                         """,
                     arguments: [url.absoluteString, url.sha256, url.host, url.path,
                                 isInternal ? 1 : 0, now.timeIntervalSince1970,
-                                shouldQueue ? 0 : 3])
+                                shouldQueue ? 0 : 3, skipReason])
                 if shouldQueue { queued += 1 }
             }
         }
@@ -181,6 +185,38 @@ extension Store {
     public func sitemapCount() throws -> Int {
         try dbQueue.read { db in
             try Int.fetchOne(db, sql: "SELECT count(*) FROM urls WHERE in_sitemap = 1") ?? 0
+        }
+    }
+
+    /// The host the seed's redirect leaves the crawl for, when it does.
+    ///
+    /// A crawl of example.com.au whose seed redirects to example.com never treats
+    /// that destination as part of the site — `is_internal` is false for
+    /// everything found there — so a sitemap discovered afterwards can list URLs
+    /// that were never reachable from this crawl at all. Nothing in the reports
+    /// says so on its own.
+    ///
+    /// Judged by `is_internal` on the destination row rather than by comparing
+    /// hostnames here: that flag is computed once, at write time, against the
+    /// config the crawl actually ran with (see `Store.isInternal`). A live
+    /// hostname comparison would instead read whatever the seed field currently
+    /// holds — which can have been edited for the *next* crawl before this one's
+    /// last tick runs — and would also miss a www-add/drop or subdomain redirect
+    /// that `crawlSubdomains` correctly treats as internal.
+    ///
+    /// Only follows the seed's immediate redirect hop. A chain that starts
+    /// on-host and only later leaves it (a.com -> a.com/x -> b.com) is not
+    /// detected and returns nil; following the whole chain is not implemented.
+    public func seedRedirectHost() throws -> String? {
+        try dbQueue.read { db in
+            try String.fetchOne(db, sql: """
+                SELECT destination.host
+                FROM crawl_meta cm
+                JOIN urls seed ON seed.url = cm.seed_url
+                JOIN responses r ON r.url_id = seed.id
+                JOIN urls destination ON destination.id = r.redirect_target_id
+                WHERE cm.id = 1 AND destination.is_internal = 0
+                """)
         }
     }
 }

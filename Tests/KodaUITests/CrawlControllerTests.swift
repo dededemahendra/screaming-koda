@@ -120,6 +120,48 @@ private func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) async
     #expect(notice.lowercased().contains("robots"), "an empty table must say why; got: \(notice)")
 }
 
+/// The exact shape that produced the report bug: the seed 301s to a different
+/// host, and robots.txt — fetched from the *original* host, since that is
+/// where the crawl was pointed — announces a sitemap that lives on the
+/// destination. Every URL that sitemap lists belongs to a site this crawl
+/// never had a chance to fetch. Before the fix, nothing told the user that;
+/// the crawl looked merely small, and the Crawlability report turned the
+/// sitemap's entries into hundreds of "breaks indexing" findings.
+private struct RedirectingSeedClient: HTTPClient {
+    func fetch(url: String, method: String, userAgent: String, timeout: TimeInterval) async -> FetchOutcome {
+        switch url {
+        case "https://old.test/":
+            return .response(HTTPResponse(status: 301, headers: ["Location": "https://new.test/"],
+                                          body: Data(), elapsedMs: 1))
+        case "https://old.test/robots.txt":
+            return .response(HTTPResponse(status: 200, headers: ["Content-Type": "text/plain"],
+                                          body: Data("User-agent: *\nSitemap: https://new.test/sitemap.xml".utf8),
+                                          elapsedMs: 1))
+        case "https://new.test/sitemap.xml":
+            return .response(HTTPResponse(status: 200, headers: ["Content-Type": "application/xml"],
+                                          body: Data("""
+                <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+                  <url><loc>https://new.test/a</loc></url>
+                  <url><loc>https://new.test/b</loc></url>
+                </urlset>
+                """.utf8), elapsedMs: 1))
+        default:
+            return .response(HTTPResponse(status: 404, headers: [:], body: Data(), elapsedMs: 1))
+        }
+    }
+}
+
+@MainActor
+@Test func anOffHostSeedRedirectNamesTheDestination() async {
+    let c = CrawlController(client: RedirectingSeedClient(), parser: SwiftSoupParser(), dbPath: nil)
+    c.seedURL = "https://old.test/"
+    await c.start()
+
+    #expect(await waitUntil { c.state == .finished })
+    let notice = c.notice ?? ""
+    #expect(notice.contains("new.test"), "the notice must name the destination host; got: \(notice)")
+}
+
 @MainActor
 @Test func stopEndsAnActiveCrawl() async {
     let c = CrawlController(client: ThreePageClient(), parser: SwiftSoupParser(), dbPath: nil)
