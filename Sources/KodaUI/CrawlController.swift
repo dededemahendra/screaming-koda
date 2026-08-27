@@ -470,15 +470,14 @@ public final class CrawlController {
     /// make this one redundant.
     ///
     /// The redirect check runs first: a crawl whose seed 301s off-host still
-    /// fetches that one row, so it is never "nothing was crawled", but
-    /// everything the sitemap then lists belongs to the destination, not this
-    /// site, which the robots branch below would otherwise misattribute.
+    /// fetches that one row, so it is never "nothing was crawled" — but
+    /// nothing on the destination host was ever reachable from this crawl,
+    /// which the robots branch below would otherwise misattribute.
     private func explainStalledCrawlIfNeeded(store: Store) {
         guard !robotsUnreachableNoticeShown else { return }
-        if let destination = try? store.seedRedirectHost(seedHost: crawlHost) {
-            notice = appendNotice(notice, "The seed redirects to \(destination), a different host — "
-                + "this crawl only fetched that redirect, and everything the sitemap lists belongs to "
-                + "\(destination), not this one. Crawl \(destination) instead.")
+        if let destination = try? store.seedRedirectHost() {
+            notice = appendNotice(notice, "The seed redirects to \(destination), a different host. "
+                + "Anything found there was never reachable from this crawl — crawl \(destination) instead.")
             return
         }
         guard let summary = try? store.summary() else { return }

@@ -188,23 +188,35 @@ extension Store {
         }
     }
 
-    /// The host the seed redirected to, when that is not the host being crawled.
+    /// The host the seed's redirect leaves the crawl for, when it does.
     ///
-    /// A crawl of example.com.au whose seed redirects to example.com fetches the
-    /// redirect and nothing else: every URL on the destination is a different site
-    /// as far as this crawl is concerned. Nothing in the reports says so, and the
-    /// sitemap's entries then look like hundreds of indexing failures.
-    public func seedRedirectHost(seedHost: String?) throws -> String? {
+    /// A crawl of example.com.au whose seed redirects to example.com never treats
+    /// that destination as part of the site — `is_internal` is false for
+    /// everything found there — so a sitemap discovered afterwards can list URLs
+    /// that were never reachable from this crawl at all. Nothing in the reports
+    /// says so on its own.
+    ///
+    /// Judged by `is_internal` on the destination row rather than by comparing
+    /// hostnames here: that flag is computed once, at write time, against the
+    /// config the crawl actually ran with (see `Store.isInternal`). A live
+    /// hostname comparison would instead read whatever the seed field currently
+    /// holds — which can have been edited for the *next* crawl before this one's
+    /// last tick runs — and would also miss a www-add/drop or subdomain redirect
+    /// that `crawlSubdomains` correctly treats as internal.
+    ///
+    /// Only follows the seed's immediate redirect hop. A chain that starts
+    /// on-host and only later leaves it (a.com -> a.com/x -> b.com) is not
+    /// detected and returns nil; following the whole chain is not implemented.
+    public func seedRedirectHost() throws -> String? {
         try dbQueue.read { db in
-            guard let host = try String.fetchOne(db, sql: """
+            try String.fetchOne(db, sql: """
                 SELECT destination.host
                 FROM crawl_meta cm
                 JOIN urls seed ON seed.url = cm.seed_url
                 JOIN responses r ON r.url_id = seed.id
                 JOIN urls destination ON destination.id = r.redirect_target_id
-                WHERE cm.id = 1
-                """) else { return nil }
-            return host == seedHost ? nil : host
+                WHERE cm.id = 1 AND destination.is_internal = 0
+                """)
         }
     }
 }

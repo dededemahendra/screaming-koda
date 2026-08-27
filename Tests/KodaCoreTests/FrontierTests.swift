@@ -136,6 +136,25 @@ private func u(_ s: String) -> NormalizedURL {
     #expect(internalReason == nil, "the internal, unfiltered URL was queued, so it has nothing to explain")
 }
 
+/// The other branch: an internal URL the sitemap declares that the crawl's
+/// own filters would reject. `seedFromSitemapRecordsWhyEachURLWasNotQueued`
+/// only exercises "external" — this covers "excluded by URL filters" too, so
+/// both of `seedFromSitemap`'s two skip reasons are proven, not just one.
+@Test func seedFromSitemapRecordsExcludedByFiltersForAFilteredInternalURL() throws {
+    let store = try makeStore()
+    var config = CrawlConfig(seedURL: "https://example.com/")
+    config.exclude = ["/private"]
+    let filtered = u("https://example.com/private/page")
+
+    let queued = try store.seedFromSitemap([filtered], config: config, now: Date())
+    #expect(queued == 0, "a filtered URL is never queued regardless of host")
+
+    let reason = try store.dbQueue.read { db in
+        try String.fetchOne(db, sql: "SELECT skip_reason FROM urls WHERE path = '/private/page'")
+    }
+    #expect(reason == "excluded by URL filters", "internal but filtered is a different reason than external")
+}
+
 // MARK: - seedRedirectHost
 
 private func seededStoreForRedirect(seedURL: String) throws -> (Store, CrawlConfig, Int64, NormalizedURL) {
@@ -155,7 +174,7 @@ private func seededStoreForRedirect(seedURL: String) throws -> (Store, CrawlConf
                              redirectTarget: destination, bodyGz: nil, xRobotsTag: nil, facts: nil)
     _ = try store.write(results: [result], config: config, now: Date())
 
-    #expect(try store.seedRedirectHost(seedHost: "old.test") == "new.test")
+    #expect(try store.seedRedirectHost() == "new.test")
 }
 
 @Test func seedRedirectHostIsNilForASameHostRedirect() throws {
@@ -166,7 +185,7 @@ private func seededStoreForRedirect(seedURL: String) throws -> (Store, CrawlConf
                              redirectTarget: destination, bodyGz: nil, xRobotsTag: nil, facts: nil)
     _ = try store.write(results: [result], config: config, now: Date())
 
-    #expect(try store.seedRedirectHost(seedHost: "old.test") == nil)
+    #expect(try store.seedRedirectHost() == nil)
 }
 
 @Test func seedRedirectHostIsNilWhenTheSeedDoesNotRedirect() throws {
@@ -176,11 +195,33 @@ private func seededStoreForRedirect(seedURL: String) throws -> (Store, CrawlConf
                              redirectTarget: nil, bodyGz: nil, xRobotsTag: nil, facts: nil)
     _ = try store.write(results: [result], config: config, now: Date())
 
-    #expect(try store.seedRedirectHost(seedHost: "old.test") == nil)
+    #expect(try store.seedRedirectHost() == nil)
 }
 
 @Test func seedRedirectHostIsNilWithNoSeedRowAtAll() throws {
     let store = try makeStore()
     try store.initializeCrawl(config: CrawlConfig(seedURL: "https://old.test/"), startedAt: Date())
-    #expect(try store.seedRedirectHost(seedHost: "old.test") == nil)
+    #expect(try store.seedRedirectHost() == nil)
+}
+
+/// Guards against reintroducing a live-hostname comparison: a bare host and
+/// its `www.` subdomain differ as strings, but with `crawlSubdomains` on,
+/// `Store.isInternal` — the same judge every other URL in the crawl is held
+/// to — treats this as the same site, and the crawl does go on to fetch it.
+/// A naive `host == seedHost` check has no way to know that and would
+/// wrongly report this ordinary redirect as leaving the site.
+@Test func seedRedirectHostIsNilForASubdomainRedirectWhenCrawlSubdomainsIsOn() throws {
+    var config = CrawlConfig(seedURL: "https://old.test/")
+    config.crawlSubdomains = true
+    let store = try makeStore()
+    try store.initializeCrawl(config: config, startedAt: Date())
+    let seed = u("https://old.test/")
+    let id = try store.insertURLIfNew(seed, depth: 0, isInternal: true, discoveredAt: Date())
+    let destination = u("https://www.old.test/")
+    let result = CrawlResult(urlID: id, url: seed, depth: 0, status: 301, errorKind: nil,
+                             contentType: nil, contentLength: nil, responseTimeMs: 1,
+                             redirectTarget: destination, bodyGz: nil, xRobotsTag: nil, facts: nil)
+    _ = try store.write(results: [result], config: config, now: Date())
+
+    #expect(try store.seedRedirectHost() == nil)
 }
