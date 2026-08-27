@@ -153,7 +153,8 @@ extension Store {
             for url in urls {
                 let isInternal = Self.isInternal(url, seedHost: seedHost, config: config)
                 // A sitemap listing another site's URLs is a mistake worth
-                // recording, but not worth crawling.
+                // recording — not just that the URL was skipped, but why — even
+                // though the URL itself is not worth crawling.
                 let existing = try Int64.fetchOne(
                     db, sql: "SELECT id FROM urls WHERE url_hash = ?", arguments: [url.sha256])
                 if let existing {
@@ -162,15 +163,18 @@ extension Store {
                     continue
                 }
                 let shouldQueue = isInternal && Self.passesFilters(url, config: config)
+                // Same wording as discover()'s skip reasons — the Crawlability
+                // report shows both side by side and they must read as one system.
+                let skipReason: String? = shouldQueue ? nil : (isInternal ? "excluded by URL filters" : "external")
                 try db.execute(
                     sql: """
                         INSERT INTO urls (url, url_hash, host, path, depth, is_internal,
-                                          discovered_at, state, in_sitemap)
-                        VALUES (?,?,?,?,0,?,?,?,1)
+                                          discovered_at, state, in_sitemap, skip_reason)
+                        VALUES (?,?,?,?,0,?,?,?,1,?)
                         """,
                     arguments: [url.absoluteString, url.sha256, url.host, url.path,
                                 isInternal ? 1 : 0, now.timeIntervalSince1970,
-                                shouldQueue ? 0 : 3])
+                                shouldQueue ? 0 : 3, skipReason])
                 if shouldQueue { queued += 1 }
             }
         }

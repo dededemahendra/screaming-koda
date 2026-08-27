@@ -110,3 +110,28 @@ private func u(_ s: String) -> NormalizedURL {
     try store.markDone(goodID)
     #expect(try store.urlCounts().inFlight == 0)
 }
+
+// MARK: - seedFromSitemap
+
+/// Before this, `seedFromSitemap`'s INSERT omitted `skip_reason` entirely, so
+/// every URL it declined to queue landed in state 3 with no reason recorded —
+/// unlike `discover()`, which has always said why. A sitemap listing another
+/// site's URLs (e.g. because the seed redirected off-host) then looked
+/// identical, in the Crawlability report, to hundreds of real indexing
+/// failures, because nothing distinguished "external" from "blocked".
+@Test func seedFromSitemapRecordsWhyEachURLWasNotQueued() throws {
+    let store = try makeStore()
+    let config = CrawlConfig(seedURL: "https://example.com/")
+    let offHost = u("https://other.test/a")
+    let internalURL = u("https://example.com/b")
+
+    let queued = try store.seedFromSitemap([offHost, internalURL], config: config, now: Date())
+    #expect(queued == 1, "only the internal URL is ever crawlable from this seed")
+
+    let (offHostReason, internalReason) = try store.dbQueue.read { db in
+        (try String.fetchOne(db, sql: "SELECT skip_reason FROM urls WHERE path = '/a'"),
+         try String.fetchOne(db, sql: "SELECT skip_reason FROM urls WHERE path = '/b'"))
+    }
+    #expect(offHostReason == "external", "a sitemap entry on another host was never this crawl's to fetch")
+    #expect(internalReason == nil, "the internal, unfiltered URL was queued, so it has nothing to explain")
+}
