@@ -444,3 +444,30 @@ private func rows(_ store: Store, _ report: Report, _ filterID: String) throws -
     #expect(all.isSuperset(of: ["/robots-blocked", "/too-deep", "/over-cap"]))
     #expect(!all.contains("/"), "a crawled page is not in the crawlability tab")
 }
+
+/// A crawl whose seed redirects off-host discovers the destination's sitemap,
+/// and every URL in it is `in_sitemap = 1` but `is_internal = 0` — the site
+/// being crawled never had a chance to fetch any of them. Before this,
+/// `sitemapBlocked` matched on `in_sitemap = 1` alone, so those URLs counted
+/// as this site's indexing failures, turning "you typed a hostname that
+/// redirects" into hundreds of false "breaks indexing" findings.
+@Test func sitemapBlockedIgnoresURLsOnAnotherHost() throws {
+    let store = try Store(path: nil)
+    try store.migrate()
+    try store.dbQueue.write { db in
+        try db.execute(sql: """
+            INSERT INTO urls (url, url_hash, host, path, depth, is_internal,
+                              discovered_at, state, in_sitemap, skip_reason, check_only)
+            VALUES ('https://other.test/a', ?, 'other.test', '/a', 0, 0, 0, 3, 1, 'external', 0)
+            """, arguments: [Data([1])])
+        try db.execute(sql: """
+            INSERT INTO urls (url, url_hash, host, path, depth, is_internal,
+                              discovered_at, state, in_sitemap, skip_reason, check_only)
+            VALUES ('https://fx.test/b', ?, 'fx.test', '/b', 0, 1, 0, 3, 1, 'excluded by URL filters', 0)
+            """, arguments: [Data([2])])
+    }
+
+    let filter = Reports.crawlability.filters.first { $0.id == "sitemapBlocked" }!
+    let ids = try store.ids(for: Reports.crawlability, filter: filter, sortBy: nil, ascending: true)
+    #expect(ids.count == 1, "only the internal URL was ever this crawl's to fetch")
+}
